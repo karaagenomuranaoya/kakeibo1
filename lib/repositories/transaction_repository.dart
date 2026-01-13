@@ -10,10 +10,8 @@ class TransactionRepository {
     final prefs = await SharedPreferences.getInstance();
     final List<TransactionItem> currentList = await getAllTransactions();
 
-    // 新しいデータを先頭に追加
     currentList.insert(0, item);
 
-    // JSON文字列に変換して保存
     final String jsonString = json.encode(
       currentList.map((e) => e.toJson()).toList(),
     );
@@ -29,5 +27,25 @@ class TransactionRepository {
 
     final List<dynamic> jsonList = json.decode(jsonString);
     return jsonList.map((e) => TransactionItem.fromJson(e)).toList();
+  }
+
+  // ★追加: 削除処理
+  Future<void> deleteTransaction(TransactionItem item) async {
+    final prefs = await SharedPreferences.getInstance();
+    final List<TransactionItem> currentList = await getAllTransactions();
+
+    // IDを持たないので、日時と金額と費目が一致する最初のデータを削除
+    // (厳密にはID導入がベストですが、現状の仕様ならこれで十分動作します)
+    currentList.removeWhere(
+      (element) =>
+          element.date == item.date &&
+          element.amount == item.amount &&
+          element.expense == item.expense,
+    );
+
+    final String jsonString = json.encode(
+      currentList.map((e) => e.toJson()).toList(),
+    );
+    await prefs.setString(_key, jsonString);
   }
 }

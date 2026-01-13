@@ -12,7 +12,7 @@ class ShopScreen extends StatefulWidget {
 
 class _ShopScreenState extends State<ShopScreen> {
   final PlayerRepository _repository = PlayerRepository();
-  int _currentCp = 0;
+  int _currentBd = 0; // cp -> bd
   List<String> _purchasedIds = [];
   String? _equippedSkin;
 
@@ -27,7 +27,7 @@ class _ShopScreenState extends State<ShopScreen> {
     final purchased = await _repository.getPurchasedItemIds();
     final skin = await _repository.getEquippedSkin();
     setState(() {
-      _currentCp = stats['cp'];
+      _currentBd = stats['bd']; // cp -> bd
       _purchasedIds = purchased;
       _equippedSkin = skin;
     });
@@ -56,7 +56,6 @@ class _ShopScreenState extends State<ShopScreen> {
   }
 
   Future<void> _equip(String skinId) async {
-    // 既に装備中なら外す（トグル）
     if (_equippedSkin == skinId) {
       await _repository.equipSkin(null);
     } else {
@@ -68,7 +67,7 @@ class _ShopScreenState extends State<ShopScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF050505), // 深い黒
+      backgroundColor: const Color(0xFF050505),
       appBar: AppBar(
         title: Text(
           'THE DARK WEB',
@@ -81,8 +80,9 @@ class _ShopScreenState extends State<ShopScreen> {
           Center(
             child: Padding(
               padding: const EdgeInsets.only(right: 16),
+              // ★修正: CP -> BD
               child: Text(
-                'CP: $_currentCp',
+                'BD: $_currentBd',
                 style: GoogleFonts.vt323(color: Colors.white, fontSize: 16),
               ),
             ),
@@ -113,7 +113,6 @@ class _ShopScreenState extends State<ShopScreen> {
             ),
             child: Row(
               children: [
-                // アイコン
                 Container(
                   width: 50,
                   height: 50,
@@ -131,7 +130,6 @@ class _ShopScreenState extends State<ShopScreen> {
                   ),
                 ),
                 const SizedBox(width: 16),
-                // 情報
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -151,8 +149,9 @@ class _ShopScreenState extends State<ShopScreen> {
                         ),
                       ),
                       const SizedBox(height: 5),
+                      // ★修正: CP -> BD
                       Text(
-                        "PRICE: ${item.price} CP",
+                        "PRICE: ${item.price} BD",
                         style: GoogleFonts.vt323(
                           color: Colors.yellow,
                           fontSize: 14,
@@ -161,7 +160,6 @@ class _ShopScreenState extends State<ShopScreen> {
                     ],
                   ),
                 ),
-                // ボタン
                 if (!isPurchased)
                   ElevatedButton(
                     onPressed: () => _purchase(item),

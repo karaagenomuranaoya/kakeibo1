@@ -2,18 +2,26 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 class StatsHeader extends StatelessWidget {
-  final int cp;
+  final int bd;
   final int realSpending;
   final int level;
   final double xpProgress;
 
   const StatsHeader({
     super.key,
-    required this.cp,
+    required this.bd,
     required this.realSpending,
     required this.level,
     required this.xpProgress,
   });
+
+  // 数値を3桁カンマ区切りの文字列にするヘルパー
+  String _format(int number) {
+    return number.toString().replaceAllMapped(
+      RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'),
+      (Match m) => '${m[1]},',
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -21,7 +29,6 @@ class StatsHeader extends StatelessWidget {
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // CP & Spending
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -30,7 +37,7 @@ class StatsHeader extends StatelessWidget {
                 fit: BoxFit.scaleDown,
                 alignment: Alignment.centerLeft,
                 child: Text(
-                  'COMBAT POWER',
+                  'BUDGET DAMAGE',
                   style: GoogleFonts.pressStart2p(
                     color: Colors.cyanAccent,
                     fontSize: 10,
@@ -41,8 +48,9 @@ class StatsHeader extends StatelessWidget {
               FittedBox(
                 fit: BoxFit.scaleDown,
                 alignment: Alignment.centerLeft,
+                // ★修正: フォーマット適用
                 child: Text(
-                  '$cp',
+                  _format(bd),
                   style: GoogleFonts.vt323(
                     color: Colors.white,
                     fontSize: 40,
@@ -52,17 +60,22 @@ class StatsHeader extends StatelessWidget {
                 ),
               ),
               Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  Icon(
-                    Icons.currency_yen,
-                    color: Colors.grey.shade600,
-                    size: 12,
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 6),
+                    child: Icon(
+                      Icons.currency_yen,
+                      color: Colors.grey.shade400,
+                      size: 20,
+                    ),
                   ),
+                  // ★修正: フォーマット適用
                   Text(
-                    "$realSpending",
+                    _format(realSpending),
                     style: GoogleFonts.vt323(
-                      color: Colors.grey.shade600,
-                      fontSize: 14,
+                      color: Colors.grey.shade400,
+                      fontSize: 24,
                     ),
                   ),
                 ],
@@ -71,7 +84,6 @@ class StatsHeader extends StatelessWidget {
           ),
         ),
         const SizedBox(width: 16),
-        // Level & Bar
         Column(
           crossAxisAlignment: CrossAxisAlignment.end,
           children: [

@@ -1,7 +1,4 @@
-enum ShopItemType {
-  multiplier, // 倍率アップ（インフレ）
-  skin, // 見た目変更
-}
+enum ShopItemType { multiplier, skin }
 
 class ShopItem {
   final String id;
@@ -9,8 +6,8 @@ class ShopItem {
   final String description;
   final int price;
   final ShopItemType type;
-  final double? effectValue; // 倍率加算値など
-  final String? skinAssetId; // スキン用ID
+  final double? effectValue;
+  final String? skinAssetId;
 
   const ShopItem({
     required this.id,
@@ -25,11 +22,12 @@ class ShopItem {
 
 // 闇市の商品リスト
 final List<ShopItem> darkWebItems = [
-  // --- インフレ加速装置 (Multiplier) ---
+  // Multiplier
   const ShopItem(
     id: 'overclock_v1',
     name: 'CPU Overclock v1.0',
-    description: 'CP獲得倍率を +0.1 加算する。初期衝動。',
+    // ★修正: CP -> BD
+    description: 'BD獲得倍率を +0.1 加算する。初期衝動。',
     price: 1000,
     type: ShopItemType.multiplier,
     effectValue: 0.1,
@@ -37,7 +35,7 @@ final List<ShopItem> darkWebItems = [
   const ShopItem(
     id: 'gpu_boost',
     name: 'GPU Turbo Boost',
-    description: 'CP獲得倍率を +0.2 加算する。描画負荷増大。',
+    description: 'BD獲得倍率を +0.2 加算する。描画負荷増大。',
     price: 5000,
     type: ShopItemType.multiplier,
     effectValue: 0.2,
@@ -45,7 +43,7 @@ final List<ShopItem> darkWebItems = [
   const ShopItem(
     id: 'crypto_miner',
     name: 'Illegal Miner',
-    description: 'CP獲得倍率を +0.5 加算する。背徳の味。',
+    description: 'BD獲得倍率を +0.5 加算する。背徳の味。',
     price: 20000,
     type: ShopItemType.multiplier,
     effectValue: 0.5,
@@ -53,13 +51,13 @@ final List<ShopItem> darkWebItems = [
   const ShopItem(
     id: 'quantum_core',
     name: 'Quantum Core',
-    description: 'CP獲得倍率を +1.0 加算する。物理法則の無視。',
+    description: 'BD獲得倍率を +1.0 加算する。物理法則の無視。',
     price: 100000,
     type: ShopItemType.multiplier,
     effectValue: 1.0,
   ),
 
-  // --- スキン (Visual Hacks) ---
+  // Skins
   const ShopItem(
     id: 'skin_matrix',
     name: 'VISUAL HACK: MATRIX',

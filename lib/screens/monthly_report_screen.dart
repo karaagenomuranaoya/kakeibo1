@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import '../models/category_tag.dart';
 import '../models/transaction_item.dart';
 import '../repositories/transaction_repository.dart';
+import '../repositories/player_repository.dart';
+import '../repositories/category_repository.dart';
 
 class MonthlyHistoryScreen extends StatefulWidget {
   const MonthlyHistoryScreen({super.key});
@@ -10,7 +12,6 @@ class MonthlyHistoryScreen extends StatefulWidget {
 }
 
 class _MonthlyHistoryScreenState extends State<MonthlyHistoryScreen> {
-  // 初期位置を現在の月に設定 (1000ヶ月目を現在とする)
   final PageController _pageController = PageController(initialPage: 1000);
 
   @override
@@ -41,10 +42,12 @@ class MonthPage extends StatefulWidget {
 
 class _MonthPageState extends State<MonthPage> {
   List<TransactionItem> _history = [];
+  List<CategoryTag> _categories = [];
   final TransactionRepository _repository = TransactionRepository();
+  final PlayerRepository _playerRepository = PlayerRepository();
+  final CategoryRepository _categoryRepository = CategoryRepository();
 
-  // 追加: 表示モードの切り替え（0:履歴, 1:分析）
-  int _viewMode = 0;
+  int _viewMode = 0; // 0:履歴, 1:分析
 
   @override
   void initState() {
@@ -54,11 +57,55 @@ class _MonthPageState extends State<MonthPage> {
 
   Future<void> _load() async {
     final allItems = await _repository.getAllTransactions();
+    final cats = await _categoryRepository.getCategories();
+
     setState(() {
       _history = allItems.where((i) {
         return i.date.year == widget.year && i.date.month == widget.month;
       }).toList();
+      _categories = cats;
     });
+  }
+
+  Future<void> _confirmDelete(TransactionItem item) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('削除しますか？'),
+        content: Text(
+          '¥${item.amount} (${item.expense})\n\n※BD(Combat Power)は返却されませんが、トップ画面の支出合計からは減算されます。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('キャンセル'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: const Text('削除'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      await _deleteItem(item);
+    }
+  }
+
+  Future<void> _deleteItem(TransactionItem item) async {
+    // 1. 履歴から削除
+    await _repository.deleteTransaction(item);
+    // 2. 支出額を減算（返金）
+    await _playerRepository.refundRealSpending(item.amount);
+    // 3. リスト更新
+    await _load();
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('削除しました')));
   }
 
   @override
@@ -67,7 +114,6 @@ class _MonthPageState extends State<MonthPage> {
 
     return Column(
       children: [
-        // ヘッダー（年月表示）
         Padding(
           padding: const EdgeInsets.all(10),
           child: Text(
@@ -75,11 +121,7 @@ class _MonthPageState extends State<MonthPage> {
             style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
           ),
         ),
-
-        // 合計金額カード
         _buildSummaryCard(total),
-
-        // 表示切り替えスイッチ
         Container(
           margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 5),
           decoration: BoxDecoration(
@@ -94,8 +136,6 @@ class _MonthPageState extends State<MonthPage> {
           ),
         ),
         const SizedBox(height: 10),
-
-        // コンテンツ部分（履歴リスト or 分析グラフ）
         Expanded(
           child: _viewMode == 0
               ? _buildHistoryList()
@@ -133,7 +173,6 @@ class _MonthPageState extends State<MonthPage> {
     );
   }
 
-  // 元の履歴リスト
   Widget _buildHistoryList() {
     if (_history.isEmpty) {
       return const Center(
@@ -144,17 +183,19 @@ class _MonthPageState extends State<MonthPage> {
       itemCount: _history.length,
       itemBuilder: (c, i) {
         final item = _history[i];
-        final expenseStr = item.expense == 'デフォルト' ? '' : ' (${item.expense})';
-        final paymentStr = item.payment == 'デフォルト' ? '' : '${item.payment} / ';
+        final expenseStr =
+            (item.expense == 'デフォルト' || item.expense == 'Daily Damage')
+            ? ''
+            : ' (${item.expense})';
         return ListTile(
           title: Text('¥${item.amount}$expenseStr'),
-          subtitle: Text('$paymentStr${item.displayDate}'),
+          subtitle: Text(item.displayDate),
+          onLongPress: () => _confirmDelete(item),
         );
       },
     );
   }
 
-  // 新規追加: 分析ビュー
   Widget _buildAnalysisView(int totalAmount) {
     if (totalAmount == 0) {
       return const Center(
@@ -172,48 +213,34 @@ class _MonthPageState extends State<MonthPage> {
             style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
           ),
           const SizedBox(height: 10),
-          ..._buildRankList(isExpense: true, total: totalAmount),
-
-          const Divider(height: 40),
-
-          const Text(
-            '支払い方法別',
-            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-          ),
-          const SizedBox(height: 10),
-          ..._buildRankList(isExpense: false, total: totalAmount),
+          ..._buildRankList(total: totalAmount),
           const SizedBox(height: 30),
         ],
       ),
     );
   }
 
-  List<Widget> _buildRankList({required bool isExpense, required int total}) {
-    // 集計処理
+  List<Widget> _buildRankList({required int total}) {
     Map<String, int> sums = {};
     for (var item in _history) {
-      final key = isExpense ? item.expense : item.payment;
+      final key = item.expense;
       sums[key] = (sums[key] ?? 0) + item.amount;
     }
 
-    // 金額順にソート
     final sortedKeys = sums.keys.toList()
       ..sort((a, b) => sums[b]!.compareTo(sums[a]!));
-
-    // カテゴリ定義を取得（色などのため）
-    final tags = isExpense ? expenseTags : paymentTags;
 
     return sortedKeys.map((key) {
       final amount = sums[key]!;
       final percent = (amount / total);
 
-      // 色を探す（デフォルトの場合はグレー）
-      Color color = Colors.grey;
+      // 色の決定ロジック
+      Color color = Colors.blueGrey; // デフォルト色
       try {
-        if (key != 'デフォルト') {
-          color = tags.firstWhere((t) => t.label == key).color;
-        }
-      } catch (_) {}
+        color = _categories.firstWhere((t) => t.label == key).color;
+      } catch (_) {
+        // カスタムカテゴリに見つからない場合（Daily Damageなど）はデフォルト色のまま
+      }
 
       return Padding(
         padding: const EdgeInsets.only(bottom: 12),

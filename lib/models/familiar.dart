@@ -2,11 +2,11 @@ import 'package:flutter/material.dart';
 
 enum SkillType {
   none,
-  lowCostBonus, // 節約ボーナス: 少額決済で倍率UP
-  nightBonus, // 夜行性: 夜間の決済で倍率UP
-  randomCritical, // 一発逆転: 低確率で超倍率
-  passiveBoost, // 常時発動: 常に少し倍率UP
-  highRoller, // 豪遊: 高額決済で倍率UP
+  lowCostBonus,
+  nightBonus,
+  randomCritical,
+  passiveBoost,
+  highRoller,
 }
 
 class Familiar {
@@ -15,9 +15,7 @@ class Familiar {
   final String description;
   final String emoji;
   final Color color;
-  final int rarity; // 1~5
-
-  // ★追加: スキル情報
+  final int rarity;
   final SkillType skillType;
   final String skillName;
   final String skillDescription;
@@ -35,7 +33,7 @@ class Familiar {
   });
 }
 
-// マスターデータ更新
+// マスターデータ
 final List<Familiar> familiarMasterList = [
   // Common
   Familiar(
@@ -47,7 +45,8 @@ final List<Familiar> familiarMasterList = [
     rarity: 1,
     skillType: SkillType.lowCostBonus,
     skillName: 'Micro Saver',
-    skillDescription: '¥1,000以下の入力時、CP獲得量 +50%',
+    // ★修正: CP -> BD
+    skillDescription: '¥1,000以下の入力時、BD獲得量 +50%',
   ),
   Familiar(
     id: 'bug_rat',
@@ -58,7 +57,7 @@ final List<Familiar> familiarMasterList = [
     rarity: 1,
     skillType: SkillType.passiveBoost,
     skillName: 'Scavenger',
-    skillDescription: '常時、CP獲得量 +10%',
+    skillDescription: '常時、BD獲得量 +10%',
   ),
 
   // Rare
@@ -71,7 +70,7 @@ final List<Familiar> familiarMasterList = [
     rarity: 2,
     skillType: SkillType.nightBonus,
     skillName: 'Night Walker',
-    skillDescription: '18:00〜06:00の入力時、CP獲得量 +50%',
+    skillDescription: '18:00〜06:00の入力時、BD獲得量 +50%',
   ),
   Familiar(
     id: 'code_spider',
@@ -82,7 +81,7 @@ final List<Familiar> familiarMasterList = [
     rarity: 2,
     skillType: SkillType.passiveBoost,
     skillName: 'Web Network',
-    skillDescription: '常時、CP獲得量 +20%',
+    skillDescription: '常時、BD獲得量 +20%',
   ),
 
   // Epic
@@ -95,7 +94,7 @@ final List<Familiar> familiarMasterList = [
     rarity: 3,
     skillType: SkillType.randomCritical,
     skillName: 'Critical Fang',
-    skillDescription: '20%の確率で、CP獲得量 3倍',
+    skillDescription: '20%の確率で、BD獲得量 3倍',
   ),
   Familiar(
     id: 'glitch_ghost',
@@ -106,7 +105,7 @@ final List<Familiar> familiarMasterList = [
     rarity: 3,
     skillType: SkillType.randomCritical,
     skillName: 'Poltergeist',
-    skillDescription: '50%の確率でCP 2倍、失敗時は等倍',
+    skillDescription: '50%の確率でBD 2倍、失敗時は等倍',
   ),
 
   // Legendary
@@ -119,7 +118,7 @@ final List<Familiar> familiarMasterList = [
     rarity: 4,
     skillType: SkillType.randomCritical,
     skillName: 'To The Moon',
-    skillDescription: '5%の確率で、CP獲得量 10倍',
+    skillDescription: '5%の確率で、BD獲得量 10倍',
   ),
   Familiar(
     id: 'quantum_cat',
@@ -130,7 +129,7 @@ final List<Familiar> familiarMasterList = [
     rarity: 4,
     skillType: SkillType.highRoller,
     skillName: 'Schrodinger',
-    skillDescription: '¥5,000以上の入力時、CP獲得量 2.5倍',
+    skillDescription: '¥5,000以上の入力時、BD獲得量 2.5倍',
   ),
 
   // God
@@ -143,6 +142,6 @@ final List<Familiar> familiarMasterList = [
     rarity: 5,
     skillType: SkillType.passiveBoost,
     skillName: 'Event Horizon',
-    skillDescription: '常時、CP獲得量 3倍',
+    skillDescription: '常時、BD獲得量 3倍',
   ),
 ];

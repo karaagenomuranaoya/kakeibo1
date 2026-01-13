@@ -14,7 +14,7 @@ class _AchievementsScreenState extends State<AchievementsScreen> {
   final PlayerRepository _repository = PlayerRepository();
   List<String> _unlockedIds = [];
   int _inputCount = 0;
-  int _totalAmount = 0;
+  int _totalBudgetDamage = 0; // totalAmount(CP) -> _totalBudgetDamage
 
   @override
   void initState() {
@@ -24,20 +24,18 @@ class _AchievementsScreenState extends State<AchievementsScreen> {
 
   Future<void> _loadData() async {
     final stats = await _repository.getPlayerStats();
-    // もしここでエラーが出る場合は、手順1のメソッドをPlayerRepositoryに追加してください
     final ids = await _repository.getUnlockedAchievementIds();
 
     setState(() {
       _inputCount = stats['inputCount'];
-      // 【修正箇所】 totalAmount ではなく cp (Combat Power) を取得します
-      _totalAmount = stats['cp'] ?? 0;
+      // ★修正: stats['cp'] -> stats['bd']
+      _totalBudgetDamage = stats['bd'] ?? 0;
       _unlockedIds = ids;
     });
   }
 
   @override
   Widget build(BuildContext context) {
-    // 解除率計算
     final progress = _unlockedIds.length / allAchievements.length;
 
     return Scaffold(
@@ -53,7 +51,6 @@ class _AchievementsScreenState extends State<AchievementsScreen> {
       ),
       body: Column(
         children: [
-          // ヘッダー部分（進捗表示）
           Container(
             padding: const EdgeInsets.all(20),
             decoration: const BoxDecoration(
@@ -88,8 +85,9 @@ class _AchievementsScreenState extends State<AchievementsScreen> {
                       ),
                     ),
                     const SizedBox(height: 5),
+                    // ★修正: TOTAL DMG: ¥...
                     Text(
-                      'TOTAL HITS: $_inputCount / TOTAL DMG: ¥$_totalAmount',
+                      'TOTAL HITS: $_inputCount / TOTAL BD: $_totalBudgetDamage',
                       style: const TextStyle(
                         color: Colors.white54,
                         fontSize: 10,
@@ -100,8 +98,6 @@ class _AchievementsScreenState extends State<AchievementsScreen> {
               ],
             ),
           ),
-
-          // 実績リスト
           Expanded(
             child: ListView.builder(
               padding: const EdgeInsets.all(10),
@@ -173,7 +169,8 @@ class _AchievementsScreenState extends State<AchievementsScreen> {
               Text(
                 item.type == AchievementType.inputCount
                     ? 'Hint: Keep attacking... (${item.threshold} hits)'
-                    : 'Hint: Increase damage... (¥${item.threshold})',
+                    // ★修正: ¥... -> BD...
+                    : 'Hint: Increase damage... (${item.threshold} BD)',
                 style: const TextStyle(color: Colors.grey, fontSize: 10),
               ),
           ],

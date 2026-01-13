@@ -4,15 +4,9 @@ import '../repositories/transaction_repository.dart';
 
 class HistoryScreen extends StatefulWidget {
   final String filterValue;
-  final String filterKey; // 'expense' or 'payment'
   final Color? color;
 
-  const HistoryScreen({
-    super.key,
-    required this.filterValue,
-    required this.filterKey,
-    this.color,
-  });
+  const HistoryScreen({super.key, required this.filterValue, this.color});
 
   @override
   State<HistoryScreen> createState() => _HistoryScreenState();
@@ -35,13 +29,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
     final allItems = await _repository.getAllTransactions();
     setState(() {
       _allHistory = allItems.where((i) {
-        if (widget.filterKey == 'expense') {
-          return i.expense == widget.filterValue;
-        }
-        if (widget.filterKey == 'payment') {
-          return i.payment == widget.filterValue;
-        }
-        return false;
+        // 単純に費目(expense)でフィルタリング
+        return i.expense == widget.filterValue;
       }).toList();
     });
   }
@@ -96,7 +85,6 @@ class _HistoryScreenState extends State<HistoryScreen> {
               ],
             ),
           ),
-
           Expanded(
             child: PageView.builder(
               controller: _pageController,
@@ -148,7 +136,6 @@ class _HistoryScreenState extends State<HistoryScreen> {
             ),
           ),
         ),
-
         Expanded(
           child: monthData.isEmpty
               ? const Center(
@@ -159,30 +146,14 @@ class _HistoryScreenState extends State<HistoryScreen> {
                   itemCount: monthData.length,
                   itemBuilder: (c, i) {
                     final item = monthData[i];
-
-                    String detail = "";
-                    if (widget.filterKey == 'expense') {
-                      if (item.payment != 'デフォルト')
-                        detail = "  /  ${item.payment}";
-                    } else {
-                      if (item.expense != 'デフォルト')
-                        detail = "  /  ${item.expense}";
-                    }
-
                     return ListTile(
-                      leading: Icon(
-                        widget.filterKey == 'payment'
-                            ? Icons.payment
-                            : Icons.label,
-                        color: widget.color,
-                      ),
+                      leading: Icon(Icons.label, color: widget.color),
                       title: Row(
                         children: [
                           Text(
                             '¥${item.amount}',
                             style: const TextStyle(fontWeight: FontWeight.bold),
                           ),
-                          // メモがある場合はアイコンを表示
                           if (item.memo != null && item.memo!.isNotEmpty) ...[
                             const SizedBox(width: 8),
                             const Icon(
@@ -196,8 +167,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                       subtitle: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text("${item.displayDate}$detail"),
-                          // メモの内容を表示
+                          Text(item.displayDate),
                           if (item.memo != null && item.memo!.isNotEmpty)
                             Text(
                               item.memo!,

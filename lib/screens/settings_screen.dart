@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
-import '../repositories/settings_repository.dart';
+import 'package:google_fonts/google_fonts.dart';
 import '../models/category_tag.dart';
+import '../repositories/category_repository.dart';
+import '../repositories/settings_repository.dart'; // 追加
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -10,10 +12,29 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  final SettingsRepository _repository = SettingsRepository();
-  List<ShortcutItem> _allCandidates = [];
-  List<String> _currentIds = [];
-  String? _defaultPaymentLabel;
+  final CategoryRepository _categoryRepository = CategoryRepository();
+  final SettingsRepository _settingsRepository = SettingsRepository(); // 追加
+
+  List<CategoryTag> _categories = [];
+
+  // 設定値
+  bool _allowEmpty = true;
+  String _defaultName = 'Daily Damage';
+
+  final List<Color> _colorPalette = [
+    Colors.redAccent,
+    Colors.orange,
+    Colors.amber,
+    Colors.green,
+    Colors.teal,
+    Colors.blue,
+    Colors.indigo,
+    Colors.purple,
+    Colors.pink,
+    Colors.brown,
+    Colors.grey,
+    Colors.blueGrey,
+  ];
 
   @override
   void initState() {
@@ -22,92 +43,230 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _load() async {
-    final candidates = _repository.getAllCandidates();
-    final ids = await _repository.loadShortcutIds();
-    final defPayment = await _repository.loadDefaultPaymentMethod();
+    final list = await _categoryRepository.getCategories();
+    final allow = await _settingsRepository.getAllowEmptyCategory();
+    final defName = await _settingsRepository.getDefaultCategoryName();
+
     setState(() {
-      _allCandidates = candidates;
-      _currentIds = ids;
-      _defaultPaymentLabel = defPayment;
+      _categories = list;
+      _allowEmpty = allow;
+      _defaultName = defName;
     });
   }
 
-  Future<void> _toggle(String id, bool isEnabled) async {
-    setState(() {
-      if (isEnabled) {
-        // 追加: 末尾に追加
-        if (!_currentIds.contains(id)) {
-          _currentIds.add(id);
-        }
-      } else {
-        // 削除
-        _currentIds.remove(id);
-      }
-    });
-    await _repository.saveShortcutIds(_currentIds);
+  Future<void> _toggleAllowEmpty(bool val) async {
+    await _settingsRepository.setAllowEmptyCategory(val);
+    setState(() => _allowEmpty = val);
   }
 
-  Future<void> _changeDefaultPayment(String? newValue) async {
-    if (newValue == null) {
-      await _repository.clearDefaultPaymentMethod();
-    } else {
-      await _repository.saveDefaultPaymentMethod(newValue);
-    }
-    setState(() {
-      _defaultPaymentLabel = newValue;
-    });
+  Future<void> _editDefaultName() async {
+    String newName = _defaultName;
+    await showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF222244),
+          title: Text(
+            'DEFAULT NAME',
+            style: GoogleFonts.vt323(color: Colors.cyanAccent),
+          ),
+          content: TextField(
+            controller: TextEditingController(text: _defaultName),
+            style: const TextStyle(color: Colors.white),
+            decoration: const InputDecoration(
+              enabledBorder: UnderlineInputBorder(
+                borderSide: BorderSide(color: Colors.cyan),
+              ),
+            ),
+            onChanged: (val) => newName = val,
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('CANCEL', style: TextStyle(color: Colors.grey)),
+            ),
+            TextButton(
+              onPressed: () async {
+                if (newName.isNotEmpty) {
+                  await _settingsRepository.setDefaultCategoryName(newName);
+                  setState(() => _defaultName = newName);
+                }
+                if (context.mounted) Navigator.pop(context);
+              },
+              child: const Text(
+                'SAVE',
+                style: TextStyle(color: Colors.cyanAccent),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _addCategory(String name, Color color) async {
+    if (name.isEmpty) return;
+    await _categoryRepository.addCategory(
+      CategoryTag(label: name, colorValue: color.value),
+    );
+    _load();
+  }
+
+  Future<void> _deleteCategory(String label) async {
+    await _categoryRepository.deleteCategory(label);
+    _load();
+  }
+
+  void _showAddDialog() {
+    String newName = '';
+    Color selectedColor = _colorPalette[0];
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setState) {
+            return AlertDialog(
+              backgroundColor: const Color(0xFF222244),
+              title: Text(
+                'NEW CATEGORY',
+                style: GoogleFonts.vt323(color: Colors.cyanAccent),
+              ),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(
+                    style: const TextStyle(color: Colors.white),
+                    decoration: const InputDecoration(
+                      labelText: 'CATEGORY NAME',
+                      labelStyle: TextStyle(color: Colors.grey),
+                      enabledBorder: UnderlineInputBorder(
+                        borderSide: BorderSide(color: Colors.cyan),
+                      ),
+                    ),
+                    onChanged: (val) => newName = val,
+                  ),
+                  const SizedBox(height: 20),
+                  const Text(
+                    'COLOR TAG',
+                    style: TextStyle(color: Colors.white70, fontSize: 12),
+                  ),
+                  const SizedBox(height: 10),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: _colorPalette.map((c) {
+                      final isSelected = c.value == selectedColor.value;
+                      return GestureDetector(
+                        onTap: () => setState(() => selectedColor = c),
+                        child: Container(
+                          width: 32,
+                          height: 32,
+                          decoration: BoxDecoration(
+                            color: c,
+                            shape: BoxShape.circle,
+                            border: isSelected
+                                ? Border.all(color: Colors.white, width: 3)
+                                : null,
+                            boxShadow: [
+                              if (isSelected)
+                                BoxShadow(
+                                  color: c.withOpacity(0.5),
+                                  blurRadius: 8,
+                                ),
+                            ],
+                          ),
+                          child: isSelected
+                              ? const Icon(
+                                  Icons.check,
+                                  size: 16,
+                                  color: Colors.white,
+                                )
+                              : null,
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text(
+                    'CANCEL',
+                    style: TextStyle(color: Colors.grey),
+                  ),
+                ),
+                TextButton(
+                  onPressed: () {
+                    _addCategory(newName, selectedColor);
+                    Navigator.pop(context);
+                  },
+                  child: const Text(
+                    'ADD',
+                    style: TextStyle(color: Colors.cyanAccent),
+                  ),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    // 費目グループと支払いグループに分ける
-    final expenseItems = _allCandidates
-        .where((i) => i.key == 'expense')
-        .toList();
-    final paymentItems = _allCandidates
-        .where((i) => i.key == 'payment')
-        .toList();
-
     return Scaffold(
       appBar: AppBar(title: const Text('設定')),
+      floatingActionButton: FloatingActionButton(
+        onPressed: _showAddDialog,
+        backgroundColor: Colors.blue,
+        child: const Icon(Icons.add),
+      ),
       body: ListView(
         children: [
-          _buildHeader('入力の初期設定'),
+          _buildHeader('未分類入力の挙動'),
+          SwitchListTile(
+            title: const Text('カテゴリ未選択を許可'),
+            subtitle: const Text('許可する場合、下記のデフォルト名で保存されます'),
+            value: _allowEmpty,
+            onChanged: _toggleAllowEmpty,
+            activeColor: Colors.blue,
+          ),
           ListTile(
-            title: const Text('デフォルトの支払い方法'),
-            subtitle: const Text('入力画面を開いた時に最初から選択状態にします'),
-            trailing: DropdownButton<String>(
-              value: _defaultPaymentLabel,
-              hint: const Text('指定なし'),
-              underline: Container(), // 下線を消す
-              items: [
-                const DropdownMenuItem(value: null, child: Text('指定なし')),
-                ...paymentTags.map((tag) {
-                  return DropdownMenuItem(
-                    value: tag.label,
-                    child: Text(tag.label, style: TextStyle(color: tag.color)),
-                  );
-                }),
-              ],
-              onChanged: _changeDefaultPayment,
+            title: const Text('デフォルトカテゴリ名'),
+            subtitle: Text(
+              _defaultName,
+              style: const TextStyle(
+                fontWeight: FontWeight.bold,
+                color: Colors.blueGrey,
+              ),
             ),
+            trailing: const Icon(Icons.edit),
+            enabled: _allowEmpty,
+            onTap: _editDefaultName,
           ),
           const Divider(),
-          _buildHeader('ホーム画面のショートカット'),
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            child: Text(
-              'ホーム画面中央に表示するボタンを選択してください。\n3つ程度がレイアウト的に最適です。',
-              style: TextStyle(color: Colors.grey, fontSize: 12),
+          _buildHeader('カスタムカテゴリ設定'),
+          if (_categories.isEmpty)
+            const Padding(
+              padding: EdgeInsets.all(20),
+              child: Center(
+                child: Text('カテゴリがありません', style: TextStyle(color: Colors.grey)),
+              ),
             ),
-          ),
-          const Divider(),
-          _buildSectionLabel('費目'),
-          ...expenseItems.map((item) => _buildSwitchTile(item)),
-          const Divider(),
-          _buildSectionLabel('支払い方法'),
-          ...paymentItems.map((item) => _buildSwitchTile(item)),
-          const SizedBox(height: 50),
+          ..._categories.map((item) {
+            return ListTile(
+              leading: CircleAvatar(backgroundColor: item.color, radius: 12),
+              title: Text(item.label),
+              trailing: IconButton(
+                icon: const Icon(Icons.delete_outline, color: Colors.red),
+                onPressed: () => _deleteCategory(item.label),
+              ),
+            );
+          }),
+          const SizedBox(height: 80),
         ],
       ),
     );
@@ -125,33 +284,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
           color: Colors.blue,
         ),
       ),
-    );
-  }
-
-  Widget _buildSectionLabel(String label) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-      child: Text(
-        label,
-        style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.grey),
-      ),
-    );
-  }
-
-  Widget _buildSwitchTile(ShortcutItem item) {
-    final isSelected = _currentIds.contains(item.id);
-    return SwitchListTile(
-      title: Text(item.label),
-      subtitle: item.label == 'デフォルト'
-          ? Text(item.key == 'expense' ? '未分類の費目' : '現金などのデフォルト支払い')
-          : null,
-      secondary: CircleAvatar(
-        backgroundColor: item.color.withOpacity(0.1),
-        child: Icon(item.icon, color: item.color, size: 20),
-      ),
-      value: isSelected,
-      onChanged: (val) => _toggle(item.id, val),
-      activeColor: Colors.blue,
     );
   }
 }
