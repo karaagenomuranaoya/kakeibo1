@@ -1,3 +1,4 @@
+import 'dart:math'; // Random用
 import 'package:flutter/material.dart';
 import 'package:flame/game.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -5,6 +6,7 @@ import '../game/kakeibo_game.dart';
 import '../models/category_tag.dart';
 import '../models/transaction_item.dart';
 import '../models/achievement.dart';
+import '../models/familiar.dart'; // Familiar, SkillType
 import '../repositories/transaction_repository.dart';
 import '../repositories/settings_repository.dart';
 import '../repositories/player_repository.dart';
@@ -14,7 +16,7 @@ import '../widgets/app_drawer.dart';
 import '../widgets/number_keypad.dart';
 import 'achievements_screen.dart';
 import 'familiar_screen.dart';
-import 'shop_screen.dart'; // 追加: 闇市画面
+import 'shop_screen.dart';
 
 class InputScreen extends StatefulWidget {
   const InputScreen({super.key});
@@ -22,7 +24,8 @@ class InputScreen extends StatefulWidget {
   State<InputScreen> createState() => _InputScreenState();
 }
 
-class _InputScreenState extends State<InputScreen> {
+class _InputScreenState extends State<InputScreen>
+    with SingleTickerProviderStateMixin {
   final TextEditingController _amountController = TextEditingController();
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
 
@@ -38,26 +41,45 @@ class _InputScreenState extends State<InputScreen> {
   DateTime _selectedDate = DateTime.now();
   String _currentMemo = '';
 
-  // プレイヤー統計
   int _totalCombatPower = 0;
   int _realSpending = 0;
   int _currentLevel = 1;
   double _xpProgress = 0.0;
 
-  // ショップ関連データ
   double _currentMultiplier = 1.0;
   String? _currentSkin;
 
-  // 実績通知用
   Achievement? _displayingAchievement;
   bool _isAchievementVisible = false;
+
+  Familiar? _currentBuddy;
+  late AnimationController _buddyAnimController;
+  String? _skillActivationMessage;
 
   @override
   void initState() {
     super.initState();
+    _buddyAnimController = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 2),
+    )..repeat(reverse: true);
+
     _loadShortcuts();
     _loadPlayerStats();
-    _loadShopData(); // 倍率とスキンのロード
+    _loadShopData();
+    _loadBuddy();
+  }
+
+  @override
+  void dispose() {
+    _amountController.dispose();
+    _buddyAnimController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadBuddy() async {
+    final buddy = await _familiarRepository.getBuddy();
+    setState(() => _currentBuddy = buddy);
   }
 
   Future<void> _loadShortcuts() async {
@@ -82,12 +104,6 @@ class _InputScreenState extends State<InputScreen> {
       _currentMultiplier = mult;
       _currentSkin = skin;
     });
-  }
-
-  @override
-  void dispose() {
-    _amountController.dispose();
-    super.dispose();
   }
 
   void _onKeyPressed(String value) {
@@ -140,9 +156,6 @@ class _InputScreenState extends State<InputScreen> {
               enabledBorder: UnderlineInputBorder(
                 borderSide: BorderSide(color: Colors.cyan),
               ),
-              focusedBorder: UnderlineInputBorder(
-                borderSide: BorderSide(color: Colors.cyanAccent),
-              ),
             ),
           ),
           actions: [
@@ -176,7 +189,6 @@ class _InputScreenState extends State<InputScreen> {
       categoryName = expenseTags[_selectedExpenseIndex!].label;
     }
 
-    // 1. 家計簿データ保存
     final newItem = TransactionItem(
       amount: amount,
       expense: categoryName,
@@ -192,27 +204,88 @@ class _InputScreenState extends State<InputScreen> {
     );
     await _repository.addTransaction(newItem);
 
-    // 2. CP計算 (インフレ倍率適用)
-    int gainedCp = (amount * _currentMultiplier).toInt();
+    double skillMultiplier = 1.0;
+    String? activationText;
 
-    // 3. プレイヤーデータ更新 & 実績チェック
+    if (_currentBuddy != null) {
+      final nowHour = DateTime.now().hour;
+      final rnd = Random().nextDouble();
+
+      switch (_currentBuddy!.skillType) {
+        case SkillType.lowCostBonus:
+          if (amount <= 1000) {
+            skillMultiplier = 1.5;
+            activationText = "MICRO SAVER ACTIVATED! (x1.5)";
+          }
+          break;
+        case SkillType.nightBonus:
+          if (nowHour >= 18 || nowHour < 6) {
+            skillMultiplier = 1.5;
+            activationText = "NIGHT WALKER ACTIVATED! (x1.5)";
+          }
+          break;
+        case SkillType.randomCritical:
+          if (_currentBuddy!.id == 'crypto_dragon') {
+            if (rnd < 0.05) {
+              skillMultiplier = 10.0;
+              activationText = "TO THE MOON!!! (x10.0)";
+            }
+          } else if (_currentBuddy!.id == 'cyber_wolf') {
+            if (rnd < 0.20) {
+              skillMultiplier = 3.0;
+              activationText = "CRITICAL FANG! (x3.0)";
+            }
+          } else {
+            if (rnd < 0.50) {
+              skillMultiplier = 2.0;
+              activationText = "LUCKY GLITCH! (x2.0)";
+            }
+          }
+          break;
+        case SkillType.passiveBoost:
+          if (_currentBuddy!.id == 'singularity_eye') {
+            skillMultiplier = 3.0;
+            activationText = "SINGULARITY POWER (x3.0)";
+          } else if (_currentBuddy!.id == 'code_spider') {
+            skillMultiplier = 1.2;
+            activationText = "WEB BOOST (x1.2)";
+          } else {
+            skillMultiplier = 1.1;
+            activationText = "PASSIVE BOOST (x1.1)";
+          }
+          break;
+        case SkillType.highRoller:
+          if (amount >= 5000) {
+            skillMultiplier = 2.5;
+            activationText = "HIGH ROLLER! (x2.5)";
+          }
+          break;
+        default:
+          break;
+      }
+    }
+
+    double finalMultiplier = _currentMultiplier * skillMultiplier;
+    int gainedCp = (amount * finalMultiplier).toInt();
+
+    if (activationText != null) {
+      setState(() => _skillActivationMessage = activationText);
+      Future.delayed(const Duration(seconds: 2), () {
+        if (mounted) setState(() => _skillActivationMessage = null);
+      });
+    }
+
     final unlockedAchievements = await _playerRepository.addTransactionData(
       realAmount: amount,
       gainedCp: gainedCp,
     );
 
-    // 4. 実績解除通知
     if (unlockedAchievements.isNotEmpty) {
       _triggerAchievementPopup(unlockedAchievements);
     }
 
-    // 5. 使い魔(卵)の育成
     await _familiarRepository.addEggClick();
-
-    // 6. ゲーム演出 (スキンIDを渡す)
     _game.triggerAttack(amount, categoryName, _currentSkin);
-
-    // 7. 表示更新
     await _loadPlayerStats();
 
     setState(() {
@@ -228,14 +301,11 @@ class _InputScreenState extends State<InputScreen> {
         _displayingAchievement = item;
         _isAchievementVisible = true;
       });
-
       await Future.delayed(const Duration(seconds: 3));
-
       if (!mounted) return;
       setState(() {
         _isAchievementVisible = false;
       });
-
       await Future.delayed(const Duration(milliseconds: 300));
     }
   }
@@ -253,103 +323,73 @@ class _InputScreenState extends State<InputScreen> {
       resizeToAvoidBottomInset: false,
       body: Stack(
         children: [
-          // 1. ゲーム画面（上半分）
+          // 1. Game Screen
           Positioned.fill(
             bottom: MediaQuery.of(context).size.height * 0.4,
             child: ClipRect(child: GameWidget(game: _game)),
           ),
 
-          // 2. CP & Level & Real Spending 表示
-          Positioned(
-            top: 50,
-            left: 20,
-            right: 20,
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      FittedBox(
-                        fit: BoxFit.scaleDown,
-                        alignment: Alignment.centerLeft,
-                        child: Text(
-                          'COMBAT POWER',
-                          style: GoogleFonts.pressStart2p(
-                            color: Colors.cyanAccent,
-                            fontSize: 10,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 5),
-                      FittedBox(
-                        fit: BoxFit.scaleDown,
-                        alignment: Alignment.centerLeft,
-                        child: Text(
-                          '$_totalCombatPower',
-                          style: GoogleFonts.vt323(
-                            color: Colors.white,
-                            fontSize: 40,
-                            letterSpacing: 2,
-                            shadows: [
-                              const Shadow(color: Colors.blue, blurRadius: 15),
-                            ],
-                          ),
-                        ),
-                      ),
-                      Row(
-                        children: [
-                          Icon(
-                            Icons.currency_yen,
-                            color: Colors.grey.shade600,
-                            size: 12,
-                          ),
-                          Text(
-                            "$_realSpending",
-                            style: GoogleFonts.vt323(
-                              color: Colors.grey.shade600,
-                              fontSize: 14,
+          // 2. Stats
+          Positioned(top: 50, left: 20, right: 20, child: _buildStatsHeader()),
+
+          // 3. Buddy
+          if (_currentBuddy != null)
+            Positioned(
+              bottom: MediaQuery.of(context).size.height * 0.55 + 10,
+              right: 20,
+              child: AnimatedBuilder(
+                animation: _buddyAnimController,
+                builder: (context, child) {
+                  return Transform.translate(
+                    offset: Offset(0, _buddyAnimController.value * 10),
+                    child: Column(
+                      children: [
+                        if (_skillActivationMessage != null)
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 4,
+                            ),
+                            margin: const EdgeInsets.only(bottom: 8),
+                            decoration: BoxDecoration(
+                              color: Colors.black.withOpacity(0.7),
+                              border: Border.all(color: Colors.yellowAccent),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Text(
+                              _skillActivationMessage!,
+                              style: GoogleFonts.vt323(
+                                color: Colors.yellowAccent,
+                                fontSize: 14,
+                                fontWeight: FontWeight.bold,
+                              ),
                             ),
                           ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    Text(
-                      'Lv.$_currentLevel',
-                      style: GoogleFonts.pressStart2p(
-                        color: Colors.yellowAccent,
-                        fontSize: 20,
-                        shadows: [
-                          const Shadow(color: Colors.orange, blurRadius: 10),
-                        ],
-                      ),
+                        Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withOpacity(0.4),
+                            shape: BoxShape.circle,
+                            boxShadow: [
+                              BoxShadow(
+                                color: _currentBuddy!.color.withOpacity(0.3),
+                                blurRadius: 15,
+                              ),
+                            ],
+                          ),
+                          child: Text(
+                            _currentBuddy!.emoji,
+                            style: const TextStyle(fontSize: 50),
+                          ),
+                        ),
+                      ],
                     ),
-                    const SizedBox(height: 5),
-                    SizedBox(
-                      width: 100,
-                      height: 6,
-                      child: LinearProgressIndicator(
-                        value: _xpProgress,
-                        backgroundColor: Colors.grey.withOpacity(0.3),
-                        color: Colors.greenAccent,
-                        borderRadius: BorderRadius.circular(2),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
+                  );
+                },
+              ),
             ),
-          ),
 
-          // 3. コックピット（下半分）
+          // 4. Cockpit (Bottom Half)
           Align(
             alignment: Alignment.bottomCenter,
             child: Container(
@@ -373,14 +413,44 @@ class _InputScreenState extends State<InputScreen> {
               child: Column(
                 children: [
                   _buildStatusDisplay(),
+                  if (_currentBuddy != null)
+                    Container(
+                      width: double.infinity,
+                      margin: const EdgeInsets.symmetric(
+                        horizontal: 20,
+                        vertical: 5,
+                      ),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 2,
+                      ),
+                      color: _currentBuddy!.color.withOpacity(0.1),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            Icons.auto_awesome,
+                            size: 12,
+                            color: _currentBuddy!.color,
+                          ),
+                          const SizedBox(width: 5),
+                          Text(
+                            "BUDDY SYSTEM: ${_currentBuddy!.name} [${_currentBuddy!.skillName}]",
+                            style: GoogleFonts.vt323(
+                              color: _currentBuddy!.color,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
 
-                  // カテゴリ選択エリア
                   Expanded(
                     flex: 2,
                     child: SingleChildScrollView(
                       padding: const EdgeInsets.symmetric(
                         horizontal: 16,
-                        vertical: 15,
+                        vertical: 5,
                       ),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -405,7 +475,6 @@ class _InputScreenState extends State<InputScreen> {
                     ),
                   ),
 
-                  // キーパッド＆アクションエリア
                   Expanded(
                     flex: 6,
                     child: Padding(
@@ -479,24 +548,33 @@ class _InputScreenState extends State<InputScreen> {
                                       child: InkWell(
                                         borderRadius: BorderRadius.circular(12),
                                         onTap: _executeAttack,
-                                        child: Column(
-                                          mainAxisAlignment:
-                                              MainAxisAlignment.center,
-                                          children: [
-                                            const Icon(
-                                              Icons.flash_on,
-                                              size: 36,
-                                              color: Colors.white,
+                                        child: FittedBox(
+                                          fit: BoxFit.scaleDown,
+                                          child: Padding(
+                                            padding: const EdgeInsets.all(8.0),
+                                            child: Column(
+                                              mainAxisAlignment:
+                                                  MainAxisAlignment.center,
+                                              children: [
+                                                const Icon(
+                                                  Icons.flash_on,
+                                                  size: 30,
+                                                  color: Colors.white,
+                                                ), // サイズ微調整 36->30
+                                                const SizedBox(
+                                                  height: 2,
+                                                ), // 4->2
+                                                Text(
+                                                  'ATTACK',
+                                                  style:
+                                                      GoogleFonts.pressStart2p(
+                                                        fontSize: 10,
+                                                        color: Colors.white,
+                                                      ),
+                                                ),
+                                              ],
                                             ),
-                                            const SizedBox(height: 4),
-                                            Text(
-                                              'ATTACK',
-                                              style: GoogleFonts.pressStart2p(
-                                                fontSize: 10,
-                                                color: Colors.white,
-                                              ),
-                                            ),
-                                          ],
+                                          ),
                                         ),
                                       ),
                                     ),
@@ -514,7 +592,7 @@ class _InputScreenState extends State<InputScreen> {
             ),
           ),
 
-          // 4. 右側メニュー (Achievements, Familiar, Shop)
+          // 5. Right Menu
           Positioned(
             top: 100,
             right: 20,
@@ -543,17 +621,17 @@ class _InputScreenState extends State<InputScreen> {
                 _buildSquareIconButton(
                   icon: Icons.egg,
                   color: Colors.greenAccent,
-                  onTap: () {
-                    Navigator.push(
+                  onTap: () async {
+                    await Navigator.push(
                       context,
                       MaterialPageRoute(
                         builder: (context) => const FamiliarScreen(),
                       ),
                     );
+                    _loadBuddy();
                   },
                 ),
                 const SizedBox(height: 15),
-                // ショップボタン (THE DARK WEB)
                 _buildSquareIconButton(
                   icon: Icons.shopping_cart,
                   color: Colors.redAccent,
@@ -564,7 +642,6 @@ class _InputScreenState extends State<InputScreen> {
                         builder: (context) => const ShopScreen(),
                       ),
                     );
-                    // 戻ってきたら最新データを反映
                     _loadPlayerStats();
                     _loadShopData();
                   },
@@ -573,10 +650,10 @@ class _InputScreenState extends State<InputScreen> {
             ),
           ),
 
-          // 5. 実績解除ポップアップ (カスタム)
+          // 6. Achievement Popup
           Positioned(
-            right: 75, // 右メニューの左
-            top: 220, // トロフィーアイコン付近の高さ
+            right: 75,
+            top: 220,
             child: AnimatedOpacity(
               opacity: _isAchievementVisible ? 1.0 : 0.0,
               duration: const Duration(milliseconds: 300),
@@ -635,6 +712,88 @@ class _InputScreenState extends State<InputScreen> {
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildStatsHeader() {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'COMBAT POWER',
+                  style: GoogleFonts.pressStart2p(
+                    color: Colors.cyanAccent,
+                    fontSize: 10,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 5),
+              FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  '$_totalCombatPower',
+                  style: GoogleFonts.vt323(
+                    color: Colors.white,
+                    fontSize: 40,
+                    letterSpacing: 2,
+                    shadows: [const Shadow(color: Colors.blue, blurRadius: 15)],
+                  ),
+                ),
+              ),
+              Row(
+                children: [
+                  Icon(
+                    Icons.currency_yen,
+                    color: Colors.grey.shade600,
+                    size: 12,
+                  ),
+                  Text(
+                    "$_realSpending",
+                    style: GoogleFonts.vt323(
+                      color: Colors.grey.shade600,
+                      fontSize: 14,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(width: 16),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            Text(
+              'Lv.$_currentLevel',
+              style: GoogleFonts.pressStart2p(
+                color: Colors.yellowAccent,
+                fontSize: 20,
+                shadows: [const Shadow(color: Colors.orange, blurRadius: 10)],
+              ),
+            ),
+            const SizedBox(height: 5),
+            SizedBox(
+              width: 100,
+              height: 6,
+              child: LinearProgressIndicator(
+                value: _xpProgress,
+                backgroundColor: Colors.grey.withOpacity(0.3),
+                color: Colors.greenAccent,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ],
+        ),
+      ],
     );
   }
 
@@ -717,7 +876,7 @@ class _InputScreenState extends State<InputScreen> {
       borderRadius: BorderRadius.circular(8),
       child: Container(
         width: double.infinity,
-        padding: const EdgeInsets.symmetric(vertical: 10),
+        padding: const EdgeInsets.symmetric(vertical: 8), // 10 -> 8 に縮小
         decoration: BoxDecoration(
           color: color,
           borderRadius: BorderRadius.circular(8),

@@ -17,6 +17,7 @@ class _FamiliarScreenState extends State<FamiliarScreen>
   int _currentClicks = 0;
   int _requiredClicks = 10;
   List<Familiar> _myCollection = [];
+  String? _buddyId; // 現在のバディID
 
   late AnimationController _pulseController;
 
@@ -40,10 +41,12 @@ class _FamiliarScreenState extends State<FamiliarScreen>
   Future<void> _loadData() async {
     final status = await _repository.getEggStatus();
     final collection = await _repository.getMyCollection();
+    final buddy = await _repository.getBuddy();
     setState(() {
       _currentClicks = status['current']!;
       _requiredClicks = status['required']!;
       _myCollection = collection;
+      _buddyId = buddy?.id;
     });
   }
 
@@ -53,18 +56,33 @@ class _FamiliarScreenState extends State<FamiliarScreen>
     final newFamiliar = await _repository.hatchEgg();
     if (newFamiliar != null) {
       if (!mounted) return;
-      // 孵化演出ダイアログ
       showDialog(
         context: context,
         barrierDismissible: false,
         builder: (context) => _buildHatchDialog(newFamiliar),
       );
-      _loadData(); // データ更新
+      _loadData();
     }
   }
 
-  // ★★★ 新規追加: 詳細閲覧ダイアログ ★★★
+  Future<void> _setBuddy(String id) async {
+    await _repository.setBuddy(id);
+    if (!mounted) return;
+    Navigator.pop(context); // ダイアログ閉じる
+    _loadData(); // 画面更新
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('BUDDY UPDATED!'),
+        backgroundColor: Colors.cyan,
+        duration: Duration(seconds: 1),
+      ),
+    );
+  }
+
   void _showDetailDialog(Familiar familiar) {
+    final isCurrentBuddy = _buddyId == familiar.id;
+
     showDialog(
       context: context,
       builder: (context) => Dialog(
@@ -72,15 +90,11 @@ class _FamiliarScreenState extends State<FamiliarScreen>
         child: Container(
           padding: const EdgeInsets.all(20),
           decoration: BoxDecoration(
-            color: const Color(0xFF0A0A12).withOpacity(0.95), // 背景を少し透過させてサイバー感
+            color: const Color(0xFF0A0A12).withOpacity(0.95),
             borderRadius: BorderRadius.circular(16),
             border: Border.all(color: familiar.color, width: 2),
             boxShadow: [
-              BoxShadow(
-                color: familiar.color.withOpacity(0.3),
-                blurRadius: 20,
-                spreadRadius: 2,
-              ),
+              BoxShadow(color: familiar.color.withOpacity(0.3), blurRadius: 20),
             ],
           ),
           child: Column(
@@ -96,13 +110,8 @@ class _FamiliarScreenState extends State<FamiliarScreen>
                 ),
               ),
               const SizedBox(height: 20),
-
-              // アイコン
               Text(familiar.emoji, style: const TextStyle(fontSize: 80)),
-
               const SizedBox(height: 15),
-
-              // 名前
               Text(
                 familiar.name,
                 style: GoogleFonts.pressStart2p(
@@ -111,49 +120,96 @@ class _FamiliarScreenState extends State<FamiliarScreen>
                 ),
                 textAlign: TextAlign.center,
               ),
-
               const SizedBox(height: 10),
-
-              // レアリティ
               Text(
                 "★" * familiar.rarity,
                 style: const TextStyle(color: Colors.yellow, fontSize: 14),
               ),
-
               const SizedBox(height: 20),
 
-              // 説明文エリア
+              // スキル表示エリア
               Container(
                 width: double.infinity,
-                padding: const EdgeInsets.all(15),
+                padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.05),
+                  color: Colors.blue.withOpacity(0.1),
+                  border: Border.all(color: Colors.blue.withOpacity(0.3)),
                   borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Colors.white12),
                 ),
-                child: Text(
-                  familiar.description,
-                  textAlign: TextAlign.center,
-                  style: GoogleFonts.vt323(color: Colors.white, fontSize: 20),
+                child: Column(
+                  children: [
+                    Text(
+                      "SKILL: ${familiar.skillName}",
+                      style: GoogleFonts.vt323(
+                        color: Colors.cyanAccent,
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      familiar.skillDescription,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        color: Colors.white70,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
                 ),
+              ),
+
+              const SizedBox(height: 10),
+
+              // 説明文
+              Text(
+                familiar.description,
+                textAlign: TextAlign.center,
+                style: GoogleFonts.vt323(color: Colors.grey, fontSize: 16),
               ),
 
               const SizedBox(height: 20),
 
-              // 閉じるボタン
-              SizedBox(
-                width: double.infinity,
-                child: OutlinedButton(
-                  onPressed: () => Navigator.pop(context),
-                  style: OutlinedButton.styleFrom(
-                    side: const BorderSide(color: Colors.white24),
-                    padding: const EdgeInsets.symmetric(vertical: 12),
+              // ボタン群
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () => Navigator.pop(context),
+                      style: OutlinedButton.styleFrom(
+                        side: const BorderSide(color: Colors.white24),
+                      ),
+                      child: Text(
+                        "CLOSE",
+                        style: GoogleFonts.vt323(
+                          color: Colors.white,
+                          fontSize: 18,
+                        ),
+                      ),
+                    ),
                   ),
-                  child: Text(
-                    "CLOSE",
-                    style: GoogleFonts.vt323(color: Colors.white, fontSize: 18),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: ElevatedButton(
+                      onPressed: isCurrentBuddy
+                          ? null
+                          : () => _setBuddy(familiar.id),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: isCurrentBuddy
+                            ? Colors.grey
+                            : familiar.color,
+                        foregroundColor: Colors.black,
+                      ),
+                      child: Text(
+                        isCurrentBuddy ? "EQUIPPED" : "SET BUDDY",
+                        style: GoogleFonts.vt323(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
                   ),
-                ),
+                ],
               ),
             ],
           ),
@@ -164,6 +220,9 @@ class _FamiliarScreenState extends State<FamiliarScreen>
 
   @override
   Widget build(BuildContext context) {
+    // ... (既存のbuildメソッド内、上部の卵エリアは変更なし) ...
+    // 下部のリスト部分のみ変更します
+
     final progress = (_currentClicks / _requiredClicks).clamp(0.0, 1.0);
     final canHatch = _currentClicks >= _requiredClicks;
 
@@ -190,9 +249,9 @@ class _FamiliarScreenState extends State<FamiliarScreen>
       ),
       body: Column(
         children: [
-          // 上部：卵（培養槽）エリア
+          // 上部：卵（培養槽）エリア (既存コードを流用)
           Container(
-            height: 300,
+            height: 280, // 少し縮める
             width: double.infinity,
             decoration: const BoxDecoration(
               border: Border(
@@ -216,8 +275,6 @@ class _FamiliarScreenState extends State<FamiliarScreen>
                   ),
                 ),
                 const SizedBox(height: 20),
-
-                // 卵本体
                 GestureDetector(
                   onTap: canHatch ? _tryHatch : null,
                   child: ScaleTransition(
@@ -226,11 +283,11 @@ class _FamiliarScreenState extends State<FamiliarScreen>
                       end: 1.05,
                     ).animate(_pulseController),
                     child: Container(
-                      width: 120,
-                      height: 150,
+                      width: 100,
+                      height: 130,
                       decoration: BoxDecoration(
                         color: Colors.black,
-                        borderRadius: BorderRadius.circular(60),
+                        borderRadius: BorderRadius.circular(50),
                         border: Border.all(
                           color: canHatch
                               ? Colors.redAccent
@@ -243,7 +300,6 @@ class _FamiliarScreenState extends State<FamiliarScreen>
                                 ? Colors.red.withOpacity(0.5)
                                 : Colors.green.withOpacity(0.3),
                             blurRadius: 30,
-                            spreadRadius: 5,
                           ),
                         ],
                       ),
@@ -260,17 +316,14 @@ class _FamiliarScreenState extends State<FamiliarScreen>
                     ),
                   ),
                 ),
-
-                const SizedBox(height: 30),
-
-                // プログレスバー
+                const SizedBox(height: 20),
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 50),
                   child: Column(
                     children: [
                       LinearProgressIndicator(
                         value: progress,
-                        minHeight: 10,
+                        minHeight: 8,
                         backgroundColor: Colors.grey.shade900,
                         color: canHatch ? Colors.redAccent : Colors.greenAccent,
                       ),
@@ -278,7 +331,7 @@ class _FamiliarScreenState extends State<FamiliarScreen>
                       Text(
                         canHatch
                             ? "TAP EGG TO HATCH!"
-                            : "DATA INPUT REQUIRED: $_currentClicks / $_requiredClicks",
+                            : "$_currentClicks / $_requiredClicks CLICKS",
                         style: GoogleFonts.vt323(
                           color: Colors.grey,
                           fontSize: 14,
@@ -291,7 +344,7 @@ class _FamiliarScreenState extends State<FamiliarScreen>
             ),
           ),
 
-          // 下部：コレクションリスト（修正済み）
+          // 下部：コレクションリスト
           Expanded(
             child: _myCollection.isEmpty
                 ? Center(
@@ -315,45 +368,79 @@ class _FamiliarScreenState extends State<FamiliarScreen>
                     itemCount: _myCollection.length,
                     itemBuilder: (context, index) {
                       final familiar = _myCollection[index];
-                      // ★★★ InkWellでラップしてタップ可能にする ★★★
+                      final isBuddy = _buddyId == familiar.id;
+
                       return Material(
                         color: Colors.transparent,
                         child: InkWell(
-                          onTap: () => _showDetailDialog(familiar), // タップで詳細表示
+                          onTap: () => _showDetailDialog(familiar),
                           borderRadius: BorderRadius.circular(8),
-                          child: Container(
-                            decoration: BoxDecoration(
-                              color: Colors.white.withOpacity(0.05),
-                              borderRadius: BorderRadius.circular(8),
-                              border: Border.all(
-                                color: familiar.color.withOpacity(0.5),
+                          child: Stack(
+                            children: [
+                              Container(
+                                width: double.infinity,
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withOpacity(0.05),
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(
+                                    color: isBuddy
+                                        ? Colors.yellowAccent
+                                        : familiar.color.withOpacity(0.5),
+                                    width: isBuddy ? 2 : 1,
+                                  ),
+                                  boxShadow: isBuddy
+                                      ? [
+                                          BoxShadow(
+                                            color: Colors.yellowAccent
+                                                .withOpacity(0.2),
+                                            blurRadius: 10,
+                                          ),
+                                        ]
+                                      : [],
+                                ),
+                                child: Column(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    Text(
+                                      familiar.emoji,
+                                      style: const TextStyle(fontSize: 40),
+                                    ),
+                                    const SizedBox(height: 5),
+                                    Text(
+                                      familiar.name,
+                                      textAlign: TextAlign.center,
+                                      style: GoogleFonts.vt323(
+                                        color: Colors.white,
+                                        fontSize: 12,
+                                      ),
+                                    ),
+                                  ],
+                                ),
                               ),
-                            ),
-                            child: Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Text(
-                                  familiar.emoji,
-                                  style: const TextStyle(fontSize: 40),
-                                ),
-                                const SizedBox(height: 5),
-                                Text(
-                                  familiar.name,
-                                  textAlign: TextAlign.center,
-                                  style: GoogleFonts.vt323(
-                                    color: Colors.white,
-                                    fontSize: 14,
+                              if (isBuddy)
+                                Positioned(
+                                  top: 5,
+                                  right: 5,
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 4,
+                                      vertical: 2,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: Colors.yellowAccent,
+                                      borderRadius: BorderRadius.circular(4),
+                                    ),
+                                    child: const Text(
+                                      "E", // Equipped
+                                      style: TextStyle(
+                                        color: Colors.black,
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 8,
+                                      ),
+                                    ),
                                   ),
                                 ),
-                                Text(
-                                  "★" * familiar.rarity,
-                                  style: const TextStyle(
-                                    color: Colors.yellow,
-                                    fontSize: 10,
-                                  ),
-                                ),
-                              ],
-                            ),
+                            ],
                           ),
                         ),
                       );
@@ -366,6 +453,7 @@ class _FamiliarScreenState extends State<FamiliarScreen>
   }
 
   Widget _buildHatchDialog(Familiar familiar) {
+    // 既存コードと同じ内容
     return Dialog(
       backgroundColor: Colors.transparent,
       child: Container(
@@ -398,17 +486,6 @@ class _FamiliarScreenState extends State<FamiliarScreen>
                 color: familiar.color,
                 fontSize: 14,
               ),
-            ),
-            const SizedBox(height: 5),
-            Text(
-              "★" * familiar.rarity,
-              style: const TextStyle(color: Colors.yellow, fontSize: 14),
-            ),
-            const SizedBox(height: 20),
-            Text(
-              familiar.description,
-              textAlign: TextAlign.center,
-              style: const TextStyle(color: Colors.white70),
             ),
             const SizedBox(height: 20),
             ElevatedButton(

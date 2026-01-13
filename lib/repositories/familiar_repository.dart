@@ -6,17 +6,17 @@ class FamiliarRepository {
   static const String _keyEggClicks = 'egg_current_clicks';
   static const String _keyHatchedCount = 'egg_hatched_count';
   static const String _keyCollection = 'familiar_collection_ids';
+  // ★追加
+  static const String _keyBuddyId = 'familiar_buddy_id';
+
+  // ... (既存のメソッド: getEggStatus, addEggClick, hatchEgg はそのまま) ...
 
   // 現在の卵の状態を取得
   Future<Map<String, int>> getEggStatus() async {
     final prefs = await SharedPreferences.getInstance();
     final clicks = prefs.getInt(_keyEggClicks) ?? 0;
     final hatchedCount = prefs.getInt(_keyHatchedCount) ?? 0;
-
-    // 必要クリック数計算: 最初は5回、以降 5 + (孵化数 * 5) ずつ増える
-    // 例: 5, 10, 15, 20...
     final requiredClicks = 5 + (hatchedCount * 5);
-
     return {
       'current': clicks,
       'required': requiredClicks,
@@ -24,59 +24,46 @@ class FamiliarRepository {
     };
   }
 
-  // 入力時に呼ぶ：クリック数を加算
   Future<void> addEggClick() async {
     final prefs = await SharedPreferences.getInstance();
     int current = prefs.getInt(_keyEggClicks) ?? 0;
     await prefs.setInt(_keyEggClicks, current + 1);
   }
 
-  // 卵を割る処理
   Future<Familiar?> hatchEgg() async {
     final status = await getEggStatus();
-    if (status['current']! < status['required']!) {
-      return null; // まだ割れない
-    }
+    if (status['current']! < status['required']!) return null;
 
     final prefs = await SharedPreferences.getInstance();
-
-    // 1. カウントリセット & 孵化回数インクリメント
     await prefs.setInt(_keyEggClicks, 0);
     await prefs.setInt(_keyHatchedCount, status['hatchedCount']! + 1);
 
-    // 2. 抽選ロジック
     final rnd = Random();
-    final roll = rnd.nextInt(100); // 0-99
-
-    // 確率設定
+    final roll = rnd.nextInt(100);
     int targetRarity;
     if (roll < 50)
-      targetRarity = 1; // 50% Common
+      targetRarity = 1;
     else if (roll < 80)
-      targetRarity = 2; // 30% Rare
+      targetRarity = 2;
     else if (roll < 95)
-      targetRarity = 3; // 15% Epic
+      targetRarity = 3;
     else if (roll < 99)
-      targetRarity = 4; // 4% Legendary
+      targetRarity = 4;
     else
-      targetRarity = 5; // 1% God
+      targetRarity = 5;
 
-    // 該当レアリティの中からランダムに1体選出
     final candidates = familiarMasterList
         .where((f) => f.rarity == targetRarity)
         .toList();
-    // もし候補がいなければ(Godなど)、レアリティを下げて再検索（安全策）
     final hit = candidates.isNotEmpty
         ? candidates[rnd.nextInt(candidates.length)]
         : familiarMasterList[0];
 
-    // 3. コレクションに追加
     final collection = prefs.getStringList(_keyCollection) ?? [];
     if (!collection.contains(hit.id)) {
       collection.add(hit.id);
       await prefs.setStringList(_keyCollection, collection);
     }
-
     return hit;
   }
 
@@ -84,7 +71,27 @@ class FamiliarRepository {
   Future<List<Familiar>> getMyCollection() async {
     final prefs = await SharedPreferences.getInstance();
     final ids = prefs.getStringList(_keyCollection) ?? [];
-
     return familiarMasterList.where((f) => ids.contains(f.id)).toList();
+  }
+
+  // ★★★ 追加: バディ機能 ★★★
+
+  // バディを設定
+  Future<void> setBuddy(String familiarId) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_keyBuddyId, familiarId);
+  }
+
+  // 現在のバディを取得
+  Future<Familiar?> getBuddy() async {
+    final prefs = await SharedPreferences.getInstance();
+    final id = prefs.getString(_keyBuddyId);
+    if (id == null) return null;
+
+    try {
+      return familiarMasterList.firstWhere((f) => f.id == id);
+    } catch (e) {
+      return null;
+    }
   }
 }

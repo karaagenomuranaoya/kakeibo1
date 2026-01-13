@@ -65,6 +65,10 @@ dependencies:
   cupertino_icons: ^1.0.8
   shared_preferences: ^2.5.4
 
+  # 新規追加: ゲームエンジンとフォント
+  flame: ^1.20.0
+  google_fonts: ^6.1.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -1411,6 +1415,275 @@ class SettingsRepository {
 ```
 
 
+--- FILE: lib/repositories/player_repository.dart ---
+```dart
+import 'package:shared_preferences/shared_preferences.dart';
+import '../models/achievement.dart';
+import '../models/shop_item.dart'; // 追加
+
+class PlayerRepository {
+  static const String _keyScore = 'player_total_score'; // CP
+  static const String _keyRealSpending = 'player_real_spending'; // リアル支出
+  static const String _keyXp = 'player_xp';
+  static const String _keyInputCount = 'player_input_count';
+  static const String _keyUnlockedAchievements = 'player_unlocked_ids';
+
+  // ★追加キー
+  static const String _keyPurchasedItems =
+      'player_purchased_items'; // 購入済みアイテムIDリスト
+  static const String _keyEquippedSkin = 'player_equipped_skin'; // 装備中のスキンID
+
+  Future<Map<String, dynamic>> getPlayerStats() async {
+    final prefs = await SharedPreferences.getInstance();
+    final xp = prefs.getInt(_keyXp) ?? 0;
+    final cp = prefs.getInt(_keyScore) ?? 0;
+    final inputCount = prefs.getInt(_keyInputCount) ?? 0;
+    final realSpending = prefs.getInt(_keyRealSpending) ?? cp;
+
+    int level = 1 + (xp / 5000).floor();
+    int currentLevelBaseXp = (level - 1) * 5000;
+    int nextLevelBaseXp = level * 5000;
+    double progress =
+        (xp - currentLevelBaseXp) / (nextLevelBaseXp - currentLevelBaseXp);
+
+    return {
+      'level': level,
+      'xp': xp,
+      'progress': progress,
+      'cp': cp,
+      'realSpending': realSpending,
+      'inputCount': inputCount,
+    };
+  }
+
+  // 現在の倍率（Multiplier）を計算して返す
+  Future<double> getCurrentMultiplier() async {
+    final prefs = await SharedPreferences.getInstance();
+    final purchasedIds = prefs.getStringList(_keyPurchasedItems) ?? [];
+
+    double multiplier = 1.0; // 基本倍率
+
+    for (var item in darkWebItems) {
+      if (item.type == ShopItemType.multiplier &&
+          purchasedIds.contains(item.id)) {
+        multiplier += (item.effectValue ?? 0.0);
+      }
+    }
+    return multiplier;
+  }
+
+  // 現在装備中のスキンIDを取得
+  Future<String?> getEquippedSkin() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_keyEquippedSkin);
+  }
+
+  // スキンを変更
+  Future<void> equipSkin(String? skinId) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (skinId == null) {
+      await prefs.remove(_keyEquippedSkin);
+    } else {
+      await prefs.setString(_keyEquippedSkin, skinId);
+    }
+  }
+
+  // アイテム購入処理
+  Future<bool> purchaseItem(ShopItem item) async {
+    final prefs = await SharedPreferences.getInstance();
+    int currentCp = prefs.getInt(_keyScore) ?? 0;
+
+    // お金が足りない
+    if (currentCp < item.price) return false;
+
+    // 支払い
+    await prefs.setInt(_keyScore, currentCp - item.price);
+
+    // アイテム付与
+    List<String> purchased = prefs.getStringList(_keyPurchasedItems) ?? [];
+    if (!purchased.contains(item.id)) {
+      purchased.add(item.id);
+      await prefs.setStringList(_keyPurchasedItems, purchased);
+    }
+
+    return true;
+  }
+
+  // 購入済みリスト取得
+  Future<List<String>> getPurchasedItemIds() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getStringList(_keyPurchasedItems) ?? [];
+  }
+
+  Future<List<String>> getUnlockedAchievementIds() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getStringList(_keyUnlockedAchievements) ?? [];
+  }
+
+  // スコア加算（InputScreenで計算した最終CPを受け取る形に変更してもいいが、ここでは既存ロジックを維持）
+  // ★修正: InputScreen側で倍率計算済みのCPを受け取るように引数を変更するのが筋だが、
+  // 既存メソッド `addScoreAndCheckAchievements` は amount(元の金額) を受け取って内部でCP計算させたい。
+  // しかし、倍率計算は非同期なので、InputScreen側で「金額 × 倍率」を計算して渡す形に変更する。
+
+  // 新しい加算メソッド: amount(リアル) と gainedCp(ゲーム内) を分けて受け取る
+  Future<List<Achievement>> addTransactionData({
+    required int realAmount,
+    required int gainedCp,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+
+    // 1. CP加算
+    int currentCp = prefs.getInt(_keyScore) ?? 0;
+    await prefs.setInt(_keyScore, currentCp + gainedCp);
+
+    // 2. リアル支出加算
+    int currentReal = prefs.getInt(_keyRealSpending) ?? currentCp; // 初期化対応
+    await prefs.setInt(_keyRealSpending, currentReal + realAmount);
+
+    // 3. XPと回数
+    int currentXp = prefs.getInt(_keyXp) ?? 0;
+    await prefs.setInt(_keyXp, currentXp + realAmount); // XPはリアル金額ベースが健全
+
+    int currentCount = prefs.getInt(_keyInputCount) ?? 0;
+    int newCount = currentCount + 1;
+    await prefs.setInt(_keyInputCount, newCount);
+
+    // 4. 実績解除チェック
+    List<String> unlockedIds =
+        prefs.getStringList(_keyUnlockedAchievements) ?? [];
+    List<Achievement> newUnlocked = [];
+
+    for (var achievement in allAchievements) {
+      if (unlockedIds.contains(achievement.id)) continue;
+
+      bool isUnlocked = false;
+      if (achievement.type == AchievementType.totalAmount) {
+        // 金額実績はインフレ後のCPで判定（気持ちよさ優先）
+        if ((currentCp + gainedCp) >= achievement.threshold) isUnlocked = true;
+      } else if (achievement.type == AchievementType.inputCount) {
+        if (newCount >= achievement.threshold) isUnlocked = true;
+      }
+
+      if (isUnlocked) {
+        unlockedIds.add(achievement.id);
+        newUnlocked.add(achievement);
+      }
+    }
+
+    if (newUnlocked.isNotEmpty) {
+      await prefs.setStringList(_keyUnlockedAchievements, unlockedIds);
+    }
+
+    return newUnlocked;
+  }
+
+  // 旧メソッドは非推奨にするが、エラー回避のため残すか、InputScreenを修正する。
+  // 今回はInputScreenを修正するので、この新しい `addTransactionData` を使う。
+  Future<List<Achievement>> addScoreAndCheckAchievements(int amount) async {
+    // 互換性維持のため、倍率1.0として処理
+    return addTransactionData(realAmount: amount, gainedCp: amount);
+  }
+}
+
+```
+
+
+--- FILE: lib/repositories/familiar_repository.dart ---
+```dart
+import 'dart:math';
+import 'package:shared_preferences/shared_preferences.dart';
+import '../models/familiar.dart';
+
+class FamiliarRepository {
+  static const String _keyEggClicks = 'egg_current_clicks';
+  static const String _keyHatchedCount = 'egg_hatched_count';
+  static const String _keyCollection = 'familiar_collection_ids';
+
+  // 現在の卵の状態を取得
+  Future<Map<String, int>> getEggStatus() async {
+    final prefs = await SharedPreferences.getInstance();
+    final clicks = prefs.getInt(_keyEggClicks) ?? 0;
+    final hatchedCount = prefs.getInt(_keyHatchedCount) ?? 0;
+
+    // 必要クリック数計算: 最初は5回、以降 5 + (孵化数 * 5) ずつ増える
+    // 例: 5, 10, 15, 20...
+    final requiredClicks = 5 + (hatchedCount * 5);
+
+    return {
+      'current': clicks,
+      'required': requiredClicks,
+      'hatchedCount': hatchedCount,
+    };
+  }
+
+  // 入力時に呼ぶ：クリック数を加算
+  Future<void> addEggClick() async {
+    final prefs = await SharedPreferences.getInstance();
+    int current = prefs.getInt(_keyEggClicks) ?? 0;
+    await prefs.setInt(_keyEggClicks, current + 1);
+  }
+
+  // 卵を割る処理
+  Future<Familiar?> hatchEgg() async {
+    final status = await getEggStatus();
+    if (status['current']! < status['required']!) {
+      return null; // まだ割れない
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+
+    // 1. カウントリセット & 孵化回数インクリメント
+    await prefs.setInt(_keyEggClicks, 0);
+    await prefs.setInt(_keyHatchedCount, status['hatchedCount']! + 1);
+
+    // 2. 抽選ロジック
+    final rnd = Random();
+    final roll = rnd.nextInt(100); // 0-99
+
+    // 確率設定
+    int targetRarity;
+    if (roll < 50)
+      targetRarity = 1; // 50% Common
+    else if (roll < 80)
+      targetRarity = 2; // 30% Rare
+    else if (roll < 95)
+      targetRarity = 3; // 15% Epic
+    else if (roll < 99)
+      targetRarity = 4; // 4% Legendary
+    else
+      targetRarity = 5; // 1% God
+
+    // 該当レアリティの中からランダムに1体選出
+    final candidates = familiarMasterList
+        .where((f) => f.rarity == targetRarity)
+        .toList();
+    // もし候補がいなければ(Godなど)、レアリティを下げて再検索（安全策）
+    final hit = candidates.isNotEmpty
+        ? candidates[rnd.nextInt(candidates.length)]
+        : familiarMasterList[0];
+
+    // 3. コレクションに追加
+    final collection = prefs.getStringList(_keyCollection) ?? [];
+    if (!collection.contains(hit.id)) {
+      collection.add(hit.id);
+      await prefs.setStringList(_keyCollection, collection);
+    }
+
+    return hit;
+  }
+
+  // 持っている使い魔リストを取得
+  Future<List<Familiar>> getMyCollection() async {
+    final prefs = await SharedPreferences.getInstance();
+    final ids = prefs.getStringList(_keyCollection) ?? [];
+
+    return familiarMasterList.where((f) => ids.contains(f.id)).toList();
+  }
+}
+
+```
+
+
 --- FILE: lib/repositories/transaction_repository.dart ---
 ```dart
 import 'dart:convert';
@@ -1446,6 +1719,91 @@ class TransactionRepository {
     return jsonList.map((e) => TransactionItem.fromJson(e)).toList();
   }
 }
+
+```
+
+
+--- FILE: lib/models/shop_item.dart ---
+```dart
+enum ShopItemType {
+  multiplier, // 倍率アップ（インフレ）
+  skin, // 見た目変更
+}
+
+class ShopItem {
+  final String id;
+  final String name;
+  final String description;
+  final int price;
+  final ShopItemType type;
+  final double? effectValue; // 倍率加算値など
+  final String? skinAssetId; // スキン用ID
+
+  const ShopItem({
+    required this.id,
+    required this.name,
+    required this.description,
+    required this.price,
+    required this.type,
+    this.effectValue,
+    this.skinAssetId,
+  });
+}
+
+// 闇市の商品リスト
+final List<ShopItem> darkWebItems = [
+  // --- インフレ加速装置 (Multiplier) ---
+  const ShopItem(
+    id: 'overclock_v1',
+    name: 'CPU Overclock v1.0',
+    description: 'CP獲得倍率を +0.1 加算する。初期衝動。',
+    price: 1000,
+    type: ShopItemType.multiplier,
+    effectValue: 0.1,
+  ),
+  const ShopItem(
+    id: 'gpu_boost',
+    name: 'GPU Turbo Boost',
+    description: 'CP獲得倍率を +0.2 加算する。描画負荷増大。',
+    price: 5000,
+    type: ShopItemType.multiplier,
+    effectValue: 0.2,
+  ),
+  const ShopItem(
+    id: 'crypto_miner',
+    name: 'Illegal Miner',
+    description: 'CP獲得倍率を +0.5 加算する。背徳の味。',
+    price: 20000,
+    type: ShopItemType.multiplier,
+    effectValue: 0.5,
+  ),
+  const ShopItem(
+    id: 'quantum_core',
+    name: 'Quantum Core',
+    description: 'CP獲得倍率を +1.0 加算する。物理法則の無視。',
+    price: 100000,
+    type: ShopItemType.multiplier,
+    effectValue: 1.0,
+  ),
+
+  // --- スキン (Visual Hacks) ---
+  const ShopItem(
+    id: 'skin_matrix',
+    name: 'VISUAL HACK: MATRIX',
+    description: '攻撃エフェクトを「デジタルコード」に書き換える。',
+    price: 3000,
+    type: ShopItemType.skin,
+    skinAssetId: 'matrix',
+  ),
+  const ShopItem(
+    id: 'skin_gem',
+    name: 'VISUAL HACK: GREED',
+    description: '攻撃エフェクトを「宝石」に書き換える。',
+    price: 10000,
+    type: ShopItemType.skin,
+    skinAssetId: 'gem',
+  ),
+];
 
 ```
 
@@ -1527,6 +1885,634 @@ final List<CategoryTag> paymentTags = [
   CategoryTag('PayPay', Colors.redAccent),
   CategoryTag('Suica', Colors.lightGreen),
 ];
+
+```
+
+
+--- FILE: lib/models/achievement.dart ---
+```dart
+import 'package:flutter/material.dart';
+
+enum AchievementType {
+  totalAmount, // 累計金額
+  inputCount, // 入力回数
+}
+
+class Achievement {
+  final String id;
+  final String title;
+  final String description;
+  final AchievementType type;
+  final int threshold; // 解除に必要な値（金額 or 回数）
+  final IconData icon;
+
+  const Achievement({
+    required this.id,
+    required this.title,
+    required this.description,
+    required this.type,
+    required this.threshold,
+    required this.icon,
+  });
+}
+
+// ★★★ 実績マスターデータ ★★★
+final List<Achievement> allAchievements = [
+  // --- 入力回数系（継続こそ力なり） ---
+  const Achievement(
+    id: 'count_1',
+    title: 'First Strike',
+    description: '記念すべき最初の一撃（入力）',
+    type: AchievementType.inputCount,
+    threshold: 1,
+    icon: Icons.star_border,
+  ),
+  const Achievement(
+    id: 'count_3',
+    title: 'Combo Starter',
+    description: '3回の入力を達成。リズムに乗ってきた',
+    type: AchievementType.inputCount,
+    threshold: 3,
+    icon: Icons.repeat,
+  ),
+  const Achievement(
+    id: 'count_10',
+    title: 'Habitual Striker',
+    description: '10回の入力。習慣の芽生え',
+    type: AchievementType.inputCount,
+    threshold: 10,
+    icon: Icons.history_edu,
+  ),
+  const Achievement(
+    id: 'count_50',
+    title: 'Machine Gun Finger',
+    description: '50回の入力。指先から煙が出ている',
+    type: AchievementType.inputCount,
+    threshold: 50,
+    icon: Icons.touch_app,
+  ),
+  const Achievement(
+    id: 'count_100',
+    title: 'Budget Warrior',
+    description: '100回の入力。もはや家計簿は戦いだ',
+    type: AchievementType.inputCount,
+    threshold: 100,
+    icon: Icons.military_tech,
+  ),
+
+  // --- 金額系（破壊力） ---
+  const Achievement(
+    id: 'amount_1000',
+    title: 'Pocket Change',
+    description: '累計1,000円。戦いは始まったばかり',
+    type: AchievementType.totalAmount,
+    threshold: 1000,
+    icon: Icons.monetization_on_outlined,
+  ),
+  const Achievement(
+    id: 'amount_10000',
+    title: 'Wallet Breaker',
+    description: '累計1万円。財布の紐が緩み始めた',
+    type: AchievementType.totalAmount,
+    threshold: 10000,
+    icon: Icons.money_off,
+  ),
+  const Achievement(
+    id: 'amount_50000',
+    title: 'Economy Mover',
+    description: '累計5万円。経済を回している自覚',
+    type: AchievementType.totalAmount,
+    threshold: 50000,
+    icon: Icons.trending_up,
+  ),
+  const Achievement(
+    id: 'amount_100000',
+    title: 'Big Spender',
+    description: '累計10万円。桁が変わる快感',
+    type: AchievementType.totalAmount,
+    threshold: 100000,
+    icon: Icons.diamond,
+  ),
+  const Achievement(
+    id: 'amount_500000',
+    title: 'Capitalism Hero',
+    description: '累計50万円。君は資本主義の英雄だ',
+    type: AchievementType.totalAmount,
+    threshold: 500000,
+    icon: Icons.rocket_launch,
+  ),
+];
+
+```
+
+
+--- FILE: lib/models/familiar.dart ---
+```dart
+import 'package:flutter/material.dart';
+
+class Familiar {
+  final String id;
+  final String name;
+  final String description;
+  final String emoji; // 画像の代わりに絵文字を使用（リッチに見せる加工は画面側で行う）
+  final Color color;
+  final int rarity; // 1~5
+
+  const Familiar({
+    required this.id,
+    required this.name,
+    required this.description,
+    required this.emoji,
+    required this.color,
+    required this.rarity,
+  });
+}
+
+// マスターデータ：サイバーパンク・ファミリア
+final List<Familiar> familiarMasterList = [
+  // Common (Rarity 1)
+  Familiar(
+    id: 'bit_slime',
+    name: 'Bit Slime',
+    description: 'データのカスから生まれたスライム',
+    emoji: '💧',
+    color: Colors.cyanAccent,
+    rarity: 1,
+  ),
+  Familiar(
+    id: 'bug_rat',
+    name: 'Bug Rat',
+    description: '配線をかじるのが好きなネズミ',
+    emoji: '🐀',
+    color: Colors.grey,
+    rarity: 1,
+  ),
+
+  // Rare (Rarity 2)
+  Familiar(
+    id: 'neon_bat',
+    name: 'Neon Bat',
+    description: '超音波でWi-Fiを探知する',
+    emoji: '🦇',
+    color: Colors.purpleAccent,
+    rarity: 2,
+  ),
+  Familiar(
+    id: 'code_spider',
+    name: 'Code Spider',
+    description: 'バグを捕食する益虫',
+    emoji: '🕷️',
+    color: Colors.greenAccent,
+    rarity: 2,
+  ),
+
+  // Epic (Rarity 3)
+  Familiar(
+    id: 'cyber_wolf',
+    name: 'Cyber Wolf',
+    description: '強固なファイアウォールを突破する牙',
+    emoji: '🐺',
+    color: Colors.blueAccent,
+    rarity: 3,
+  ),
+  Familiar(
+    id: 'glitch_ghost',
+    name: 'Glitch Ghost',
+    description: '存在したりしなかったりする幽霊',
+    emoji: '👻',
+    color: Colors.white70,
+    rarity: 3,
+  ),
+
+  // Legendary (Rarity 4)
+  Familiar(
+    id: 'crypto_dragon',
+    name: 'Crypto Dragon',
+    description: 'ブロックチェーンの守護者',
+    emoji: '🐉',
+    color: Colors.orangeAccent,
+    rarity: 4,
+  ),
+  Familiar(
+    id: 'quantum_cat',
+    name: 'Quantum Cat',
+    description: '観測するまで生死が確定しない猫',
+    emoji: '🐱',
+    color: Colors.pinkAccent,
+    rarity: 4,
+  ),
+
+  // God (Rarity 5)
+  Familiar(
+    id: 'singularity_eye',
+    name: 'Singularity',
+    description: '全ての収支を見通す神の目',
+    emoji: '👁️',
+    color: Colors.redAccent,
+    rarity: 5,
+  ),
+];
+
+```
+
+
+--- FILE: lib/game/kakeibo_game.dart ---
+```dart
+import 'dart:async';
+import 'dart:math';
+import 'package:flame/components.dart';
+import 'package:flame/game.dart';
+import 'package:flame/effects.dart';
+import 'package:flutter/material.dart';
+
+// 攻撃スタイル (スキンIDを受け取れるように拡張)
+class AttackStyle {
+  final Color textColor;
+  final Color coinColor;
+  final double textScale;
+  final int coinCount;
+  final double shakeIntensity;
+  final String? extraText;
+  final Color? flashColor;
+
+  // ★追加
+  final String? skinId;
+
+  AttackStyle({
+    required this.textColor,
+    required this.coinColor,
+    required this.textScale,
+    required this.coinCount,
+    required this.shakeIntensity,
+    this.extraText,
+    this.flashColor,
+    this.skinId,
+  });
+
+  factory AttackStyle.fromAmount(int amount, String? skinId) {
+    // 既存の分岐ロジック (省略せず記述)
+    AttackStyle base;
+    if (amount >= 30000) {
+      base = AttackStyle(
+        textColor: const Color(0xFF00FFFF),
+        coinColor: Colors.white,
+        textScale: 2.5,
+        coinCount: 200,
+        shakeIntensity: 50.0,
+        extraText: "GODLIKE!!!",
+        flashColor: Colors.black,
+        skinId: skinId, // 継承
+      );
+    } else if (amount >= 10000) {
+      base = AttackStyle(
+        textColor: const Color(0xFFFFD700),
+        coinColor: const Color(0xFFFFD700),
+        textScale: 2.0,
+        coinCount: 100,
+        shakeIntensity: 20.0,
+        extraText: "LEGENDARY!",
+        flashColor: Colors.white,
+        skinId: skinId,
+      );
+    } else if (amount >= 5000) {
+      base = AttackStyle(
+        textColor: Colors.red,
+        coinColor: Colors.red.shade100,
+        textScale: 1.5,
+        coinCount: 25,
+        shakeIntensity: 9.0,
+        extraText: "AMAZING!",
+        skinId: skinId,
+      );
+    } else if (amount >= 1000) {
+      base = AttackStyle(
+        textColor: Colors.yellow,
+        coinColor: Colors.yellow.shade100,
+        textScale: 1.1,
+        coinCount: 12,
+        shakeIntensity: 5.0,
+        extraText: "GOOD!",
+        skinId: skinId,
+      );
+    } else {
+      base = AttackStyle(
+        textColor: Colors.white,
+        coinColor: Colors.grey.shade300,
+        textScale: 0.8,
+        coinCount: 3,
+        shakeIntensity: 1.0,
+        skinId: skinId,
+      );
+    }
+    return base;
+  }
+}
+
+class KakeiboGame extends FlameGame {
+  final Random _rnd = Random();
+
+  @override
+  Color backgroundColor() => const Color(0xFF1A1A2E);
+
+  @override
+  Future<void> onLoad() async {
+    for (int i = 0; i < 50; i++) {
+      add(StarComponent(size));
+    }
+  }
+
+  // triggerAttackに skinId 引数を追加
+  void triggerAttack(int amount, String categoryLabel, String? skinId) {
+    final style = AttackStyle.fromAmount(amount, skinId);
+
+    add(DamageTextComponent(amount, style, size));
+
+    if (style.flashColor != null) {
+      add(ScreenFlashComponent(size, color: style.flashColor!));
+    }
+
+    if (style.extraText != null) {
+      add(ExtraTextComponent(style.extraText!, style, size));
+    }
+
+    for (int i = 0; i < style.coinCount; i++) {
+      if (_rnd.nextDouble() < 0.2) {
+        add(EmojiComponent(size, categoryLabel));
+      } else {
+        // ★スキンIDに応じてコンポーネントを切り替え
+        if (skinId == 'matrix') {
+          add(MatrixCodeComponent(size, style));
+        } else if (skinId == 'gem') {
+          add(GemComponent(size, style));
+        } else {
+          add(CoinComponent(size, style));
+        }
+      }
+    }
+
+    camera.viewfinder.add(
+      SequenceEffect([
+        MoveEffect.by(
+          Vector2(style.shakeIntensity, 0),
+          EffectController(duration: 0.05, alternate: true),
+        ),
+        MoveEffect.by(
+          Vector2(-style.shakeIntensity, style.shakeIntensity),
+          EffectController(duration: 0.05, alternate: true),
+        ),
+        MoveEffect.by(
+          Vector2(style.shakeIntensity, style.shakeIntensity),
+          EffectController(duration: 0.05, alternate: true),
+        ),
+        MoveEffect.by(
+          Vector2(0, -style.shakeIntensity),
+          EffectController(duration: 0.05, alternate: true),
+        ),
+      ]),
+    );
+  }
+}
+
+// ★新規スキン: マトリックスコード（緑の数字）
+class MatrixCodeComponent extends TextComponent with HasGameRef {
+  Vector2 velocity = Vector2.zero();
+  final Vector2 gravity = Vector2(0, 800);
+
+  MatrixCodeComponent(Vector2 screenSize, AttackStyle style) : super() {
+    // ランダムな半角数字/文字
+    final chars = ['0', '1', 'A', 'Z', 'X', '9'];
+    text = chars[Random().nextInt(chars.length)];
+
+    textRenderer = TextPaint(
+      style: TextStyle(
+        color: Colors.greenAccent,
+        fontSize: 16 + (style.textScale * 4),
+        fontFamily: 'Courier', // 等幅フォントっぽく
+        shadows: [const Shadow(color: Colors.green, blurRadius: 5)],
+      ),
+    );
+
+    position = Vector2(screenSize.x / 2, screenSize.y / 2 + 50);
+
+    double angle = (Random().nextDouble() * pi) + pi;
+    double speed = Random().nextDouble() * 300 + 200;
+    velocity = Vector2(cos(angle) * speed, sin(angle) * speed);
+  }
+
+  @override
+  void update(double dt) {
+    super.update(dt);
+    velocity += gravity * dt;
+    position += velocity * dt;
+    if (position.y > gameRef.size.y) removeFromParent();
+  }
+}
+
+// ★新規スキン: 宝石（菱形）
+class GemComponent extends PositionComponent with HasGameRef {
+  Vector2 velocity = Vector2.zero();
+  final Vector2 gravity = Vector2(0, 800);
+  final Paint _paint;
+
+  GemComponent(Vector2 screenSize, AttackStyle style)
+    : _paint = Paint()..color = Colors.redAccent.withOpacity(0.8),
+      super() {
+    size = Vector2.all(10 + (style.textScale * 5));
+    position = Vector2(screenSize.x / 2, screenSize.y / 2 + 50);
+
+    double angle = (Random().nextDouble() * pi) + pi;
+    double speed = Random().nextDouble() * 300 + 200;
+    velocity = Vector2(cos(angle) * speed, sin(angle) * speed);
+  }
+
+  @override
+  void render(Canvas canvas) {
+    super.render(canvas);
+    // 菱形を描く
+    final path = Path()
+      ..moveTo(size.x / 2, 0)
+      ..lineTo(size.x, size.y / 2)
+      ..lineTo(size.x / 2, size.y)
+      ..lineTo(0, size.y / 2)
+      ..close();
+    canvas.drawPath(path, _paint);
+    canvas.drawPath(
+      path,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..color = Colors.white
+        ..strokeWidth = 1,
+    );
+  }
+
+  @override
+  void update(double dt) {
+    super.update(dt);
+    velocity += gravity * dt;
+    position += velocity * dt;
+    angle += dt * 5; // 回転
+    if (position.y > gameRef.size.y) removeFromParent();
+  }
+}
+
+// ... 以下、既存コンポーネント (ScreenFlash, Star, Coin, Emoji, Damage, Extra) はそのまま ...
+// (長いので省略しますが、前回のコードにあるクラス定義はそのまま使ってください)
+class ScreenFlashComponent extends PositionComponent {
+  double opacity = 0.8;
+  final Color color;
+  ScreenFlashComponent(Vector2 screenSize, {required this.color}) : super() {
+    size = screenSize;
+    position = Vector2.zero();
+    priority = 100;
+  }
+  @override
+  void render(Canvas canvas) {
+    super.render(canvas);
+    canvas.drawRect(size.toRect(), Paint()..color = color.withOpacity(opacity));
+  }
+
+  @override
+  void update(double dt) {
+    super.update(dt);
+    opacity -= dt * 5.0;
+    if (opacity <= 0) removeFromParent();
+  }
+}
+
+class StarComponent extends CircleComponent {
+  StarComponent(Vector2 screenSize) : super(radius: 0) {
+    double r = Random().nextDouble() * 2 + 1;
+    radius = r;
+    paint = Paint()
+      ..color = Colors.white.withOpacity(Random().nextDouble() * 0.5 + 0.1);
+    position = Vector2(
+      Random().nextDouble() * screenSize.x,
+      Random().nextDouble() * screenSize.y,
+    );
+  }
+}
+
+class CoinComponent extends CircleComponent with HasGameRef {
+  Vector2 velocity = Vector2.zero();
+  final Vector2 gravity = Vector2(0, 800);
+  CoinComponent(Vector2 screenSize, AttackStyle style) : super(radius: 8) {
+    paint = Paint()..color = style.coinColor;
+    radius = 5.0 + (style.textScale * 2);
+    position = Vector2(screenSize.x / 2, screenSize.y / 2 + 50);
+    double angle = (Random().nextDouble() * pi) + pi;
+    double speed = Random().nextDouble() * 200 * style.textScale + 200;
+    velocity = Vector2(cos(angle) * speed, sin(angle) * speed);
+  }
+  @override
+  void update(double dt) {
+    super.update(dt);
+    velocity += gravity * dt;
+    position += velocity * dt;
+    if (position.y > gameRef.size.y) removeFromParent();
+  }
+}
+
+class EmojiComponent extends TextComponent with HasGameRef {
+  Vector2 velocity = Vector2.zero();
+  final Vector2 gravity = Vector2(0, 500);
+  EmojiComponent(Vector2 screenSize, String category) : super() {
+    String emoji = '💰';
+    if (category.contains('食'))
+      emoji = '🍔';
+    else if (category.contains('日用'))
+      emoji = '🧻';
+    text = emoji;
+    textRenderer = TextPaint(style: const TextStyle(fontSize: 24));
+    position = Vector2(screenSize.x / 2, screenSize.y / 2 + 50);
+    double angle = (Random().nextDouble() * pi) + pi;
+    double speed = Random().nextDouble() * 400 + 100;
+    velocity = Vector2(cos(angle) * speed, sin(angle) * speed);
+  }
+  @override
+  void update(double dt) {
+    super.update(dt);
+    velocity += gravity * dt;
+    position += velocity * dt;
+    angle += dt * 5;
+    if (position.y > gameRef.size.y) removeFromParent();
+  }
+}
+
+class DamageTextComponent extends TextComponent {
+  final Vector2 screenSize;
+  DamageTextComponent(int amount, AttackStyle style, this.screenSize)
+    : super() {
+    text = '¥ $amount';
+    textRenderer = TextPaint(
+      style: TextStyle(
+        fontSize: 40.0 * style.textScale,
+        fontWeight: FontWeight.w900,
+        color: style.textColor,
+        shadows: [
+          Shadow(
+            blurRadius: 10 * style.textScale,
+            color: style.coinColor.withOpacity(0.8),
+            offset: Offset(2 * style.textScale, 2 * style.textScale),
+          ),
+        ],
+      ),
+    );
+  }
+  @override
+  Future<void> onLoad() async {
+    position = Vector2(screenSize.x / 2 - size.x / 2, screenSize.y / 2 - 100);
+    add(
+      ScaleEffect.to(
+        Vector2.all(1.5),
+        EffectController(duration: 0.1, curve: Curves.easeOut),
+      ),
+    );
+    add(
+      MoveEffect.by(
+        Vector2(0, -150),
+        EffectController(duration: 0.8, curve: Curves.easeOut),
+        onComplete: () => removeFromParent(),
+      ),
+    );
+  }
+}
+
+class ExtraTextComponent extends TextComponent with HasGameRef {
+  ExtraTextComponent(String text, AttackStyle style, Vector2 screenSize)
+    : super() {
+    this.text = text;
+    textRenderer = TextPaint(
+      style: TextStyle(
+        fontSize: 32 * style.textScale,
+        fontWeight: FontWeight.bold,
+        color: Colors.white,
+        shadows: [
+          Shadow(
+            color: style.textColor,
+            blurRadius: 10,
+            offset: const Offset(3, 3),
+          ),
+        ],
+      ),
+    );
+    position = Vector2(screenSize.x / 2 - (size.x / 2), 120);
+  }
+  @override
+  Future<void> onLoad() async {
+    add(
+      ScaleEffect.to(
+        Vector2.all(1.2),
+        EffectController(
+          duration: 0.2,
+          alternate: true,
+          repeatCount: 3,
+          curve: Curves.elasticOut,
+        ),
+        onComplete: () => removeFromParent(),
+      ),
+    );
+  }
+}
 
 ```
 
@@ -1921,14 +2907,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
 --- FILE: lib/screens/input_screen.dart ---
 ```dart
 import 'package:flutter/material.dart';
+import 'package:flame/game.dart';
+import 'package:google_fonts/google_fonts.dart';
+import '../game/kakeibo_game.dart';
 import '../models/category_tag.dart';
 import '../models/transaction_item.dart';
+import '../models/achievement.dart';
 import '../repositories/transaction_repository.dart';
 import '../repositories/settings_repository.dart';
+import '../repositories/player_repository.dart';
+import '../repositories/familiar_repository.dart';
 import '../widgets/category_selector.dart';
 import '../widgets/app_drawer.dart';
 import '../widgets/number_keypad.dart';
-import 'history_screen.dart';
+import 'achievements_screen.dart';
+import 'familiar_screen.dart';
+import 'shop_screen.dart'; // 追加: 闇市画面
 
 class InputScreen extends StatefulWidget {
   const InputScreen({super.key});
@@ -1939,45 +2933,63 @@ class InputScreen extends StatefulWidget {
 class _InputScreenState extends State<InputScreen> {
   final TextEditingController _amountController = TextEditingController();
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+
   final TransactionRepository _repository = TransactionRepository();
-
   final SettingsRepository _settingsRepository = SettingsRepository();
-  List<ShortcutItem> _shortcuts = [];
+  final PlayerRepository _playerRepository = PlayerRepository();
+  final FamiliarRepository _familiarRepository = FamiliarRepository();
 
+  final KakeiboGame _game = KakeiboGame();
+
+  List<ShortcutItem> _shortcuts = [];
   int? _selectedExpenseIndex;
-  int? _selectedPaymentIndex;
   DateTime _selectedDate = DateTime.now();
-  String _currentMemo = ''; // メモの一時保存用
+  String _currentMemo = '';
+
+  // プレイヤー統計
+  int _totalCombatPower = 0;
+  int _realSpending = 0;
+  int _currentLevel = 1;
+  double _xpProgress = 0.0;
+
+  // ショップ関連データ
+  double _currentMultiplier = 1.0;
+  String? _currentSkin;
+
+  // 実績通知用
+  Achievement? _displayingAchievement;
+  bool _isAchievementVisible = false;
 
   @override
   void initState() {
     super.initState();
     _loadShortcuts();
-    _loadDefaultPayment();
+    _loadPlayerStats();
+    _loadShopData(); // 倍率とスキンのロード
   }
 
   Future<void> _loadShortcuts() async {
     final items = await _settingsRepository.getActiveShortcuts();
+    setState(() => _shortcuts = items);
+  }
+
+  Future<void> _loadPlayerStats() async {
+    final stats = await _playerRepository.getPlayerStats();
     setState(() {
-      _shortcuts = items;
+      _totalCombatPower = stats['cp'];
+      _realSpending = stats['realSpending'];
+      _currentLevel = stats['level'];
+      _xpProgress = stats['progress'];
     });
   }
 
-  Future<void> _loadDefaultPayment() async {
-    final defaultLabel = await _settingsRepository.loadDefaultPaymentMethod();
-    if (defaultLabel != null) {
-      final index = paymentTags.indexWhere((tag) => tag.label == defaultLabel);
-      if (index != -1) {
-        setState(() {
-          _selectedPaymentIndex = index;
-        });
-      }
-    }
-  }
-
-  Future<void> _onSettingsChanged() async {
-    await _loadShortcuts();
-    await _loadDefaultPayment();
+  Future<void> _loadShopData() async {
+    final mult = await _playerRepository.getCurrentMultiplier();
+    final skin = await _playerRepository.getEquippedSkin();
+    setState(() {
+      _currentMultiplier = mult;
+      _currentSkin = skin;
+    });
   }
 
   @override
@@ -1986,62 +2998,23 @@ class _InputScreenState extends State<InputScreen> {
     super.dispose();
   }
 
-  // キーパッド入力処理
   void _onKeyPressed(String value) {
     String currentText = _amountController.text;
     if (currentText == '0') currentText = '';
     if (currentText.length >= 9) return;
-    setState(() {
-      _amountController.text = currentText + value;
-    });
+    setState(() => _amountController.text = currentText + value);
   }
 
-  // キーパッド削除処理
   void _onDelete() {
     String currentText = _amountController.text;
     if (currentText.isNotEmpty) {
-      setState(() {
-        _amountController.text = currentText.substring(
+      setState(
+        () => _amountController.text = currentText.substring(
           0,
           currentText.length - 1,
-        );
-      });
+        ),
+      );
     }
-  }
-
-  // メモ入力ダイアログ
-  Future<void> _showMemoDialog() async {
-    final TextEditingController memoController = TextEditingController(
-      text: _currentMemo,
-    );
-    await showDialog(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: const Text('メモを入力'),
-          content: TextField(
-            controller: memoController,
-            autofocus: true,
-            decoration: const InputDecoration(hintText: '例: コンビニ、飲み会など'),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('キャンセル'),
-            ),
-            TextButton(
-              onPressed: () {
-                setState(() {
-                  _currentMemo = memoController.text;
-                });
-                Navigator.pop(context);
-              },
-              child: const Text('OK'),
-            ),
-          ],
-        );
-      },
-    );
   }
 
   Future<void> _pickDate() async {
@@ -2054,20 +3027,68 @@ class _InputScreenState extends State<InputScreen> {
     if (picked != null) setState(() => _selectedDate = picked);
   }
 
-  Future<void> _saveData() async {
+  Future<void> _showMemoDialog() async {
+    final TextEditingController memoController = TextEditingController(
+      text: _currentMemo,
+    );
+    await showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF222244),
+          title: Text(
+            'MEMO INPUT',
+            style: GoogleFonts.vt323(color: Colors.cyanAccent, fontSize: 24),
+          ),
+          content: TextField(
+            controller: memoController,
+            style: const TextStyle(color: Colors.white),
+            autofocus: true,
+            decoration: const InputDecoration(
+              enabledBorder: UnderlineInputBorder(
+                borderSide: BorderSide(color: Colors.cyan),
+              ),
+              focusedBorder: UnderlineInputBorder(
+                borderSide: BorderSide(color: Colors.cyanAccent),
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('CANCEL', style: TextStyle(color: Colors.grey)),
+            ),
+            TextButton(
+              onPressed: () {
+                setState(() => _currentMemo = memoController.text);
+                Navigator.pop(context);
+              },
+              child: const Text(
+                'OK',
+                style: TextStyle(color: Colors.cyanAccent),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _executeAttack() async {
     final amountText = _amountController.text;
-    if (amountText.isEmpty || amountText == "0") {
-      return;
+    if (amountText.isEmpty || amountText == "0") return;
+
+    final amount = int.parse(amountText);
+    String categoryName = '未分類';
+    if (_selectedExpenseIndex != null) {
+      categoryName = expenseTags[_selectedExpenseIndex!].label;
     }
 
+    // 1. 家計簿データ保存
     final newItem = TransactionItem(
-      amount: int.tryParse(amountText) ?? 0,
-      expense: _selectedExpenseIndex != null
-          ? expenseTags[_selectedExpenseIndex!].label
-          : 'デフォルト',
-      payment: _selectedPaymentIndex != null
-          ? paymentTags[_selectedPaymentIndex!].label
-          : 'デフォルト',
+      amount: amount,
+      expense: categoryName,
+      payment: 'Default',
       date: DateTime(
         _selectedDate.year,
         _selectedDate.month,
@@ -2077,24 +3098,53 @@ class _InputScreenState extends State<InputScreen> {
       ),
       memo: _currentMemo.isEmpty ? null : _currentMemo,
     );
-
     await _repository.addTransaction(newItem);
 
-    // ▼▼ 修正: 保存後、金額とメモだけクリアし、選択状態は維持する（Sticky仕様） ▼▼
+    // 2. CP計算 (インフレ倍率適用)
+    int gainedCp = (amount * _currentMultiplier).toInt();
+
+    // 3. プレイヤーデータ更新 & 実績チェック
+    final unlockedAchievements = await _playerRepository.addTransactionData(
+      realAmount: amount,
+      gainedCp: gainedCp,
+    );
+
+    // 4. 実績解除通知
+    if (unlockedAchievements.isNotEmpty) {
+      _triggerAchievementPopup(unlockedAchievements);
+    }
+
+    // 5. 使い魔(卵)の育成
+    await _familiarRepository.addEggClick();
+
+    // 6. ゲーム演出 (スキンIDを渡す)
+    _game.triggerAttack(amount, categoryName, _currentSkin);
+
+    // 7. 表示更新
+    await _loadPlayerStats();
+
     setState(() {
       _amountController.clear();
       _currentMemo = '';
-      // _selectedExpenseIndex = null; // コメントアウト：選択を維持
-      // _selectedPaymentIndex = null; // コメントアウト：選択を維持
     });
+  }
 
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('保存しました'),
-          duration: Duration(milliseconds: 500),
-        ),
-      );
+  Future<void> _triggerAchievementPopup(List<Achievement> achievements) async {
+    for (var item in achievements) {
+      if (!mounted) return;
+      setState(() {
+        _displayingAchievement = item;
+        _isAchievementVisible = true;
+      });
+
+      await Future.delayed(const Duration(seconds: 3));
+
+      if (!mounted) return;
+      setState(() {
+        _isAchievementVisible = false;
+      });
+
+      await Future.delayed(const Duration(milliseconds: 300));
     }
   }
 
@@ -2102,254 +3152,393 @@ class _InputScreenState extends State<InputScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       key: _scaffoldKey,
-      drawer: AppDrawer(onSettingsChanged: _onSettingsChanged),
+      drawer: AppDrawer(
+        onSettingsChanged: () async {
+          await _loadShortcuts();
+        },
+      ),
+      backgroundColor: Colors.black,
+      resizeToAvoidBottomInset: false,
       body: Stack(
         children: [
-          Column(
-            children: [
-              Expanded(
-                child: SingleChildScrollView(
-                  padding: const EdgeInsets.fromLTRB(20, 108, 20, 0),
+          // 1. ゲーム画面（上半分）
+          Positioned.fill(
+            bottom: MediaQuery.of(context).size.height * 0.4,
+            child: ClipRect(child: GameWidget(game: _game)),
+          ),
+
+          // 2. CP & Level & Real Spending 表示
+          Positioned(
+            top: 50,
+            left: 20,
+            right: 20,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
                   child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      _buildAmountDisplay(),
-                      const SizedBox(height: 10),
-                      CategorySelector(
-                        tags: expenseTags,
-                        selectedIndex: _selectedExpenseIndex,
-                        rowCount: 2,
-                        onSelected: (i) =>
-                            setState(() => _selectedExpenseIndex = i),
+                      FittedBox(
+                        fit: BoxFit.scaleDown,
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          'COMBAT POWER',
+                          style: GoogleFonts.pressStart2p(
+                            color: Colors.cyanAccent,
+                            fontSize: 10,
+                          ),
+                        ),
                       ),
-                      const Divider(
-                        height: 20,
-                        thickness: 1,
-                        color: Colors.black12,
+                      const SizedBox(height: 5),
+                      FittedBox(
+                        fit: BoxFit.scaleDown,
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          '$_totalCombatPower',
+                          style: GoogleFonts.vt323(
+                            color: Colors.white,
+                            fontSize: 40,
+                            letterSpacing: 2,
+                            shadows: [
+                              const Shadow(color: Colors.blue, blurRadius: 15),
+                            ],
+                          ),
+                        ),
                       ),
-                      CategorySelector(
-                        tags: paymentTags,
-                        selectedIndex: _selectedPaymentIndex,
-                        rowCount: 2,
-                        onSelected: (i) =>
-                            setState(() => _selectedPaymentIndex = i),
+                      Row(
+                        children: [
+                          Icon(
+                            Icons.currency_yen,
+                            color: Colors.grey.shade600,
+                            size: 12,
+                          ),
+                          Text(
+                            "$_realSpending",
+                            style: GoogleFonts.vt323(
+                              color: Colors.grey.shade600,
+                              fontSize: 14,
+                            ),
+                          ),
+                        ],
                       ),
-                      const SizedBox(height: 10),
-                      _buildActionButtons(),
-                      const SizedBox(height: 10),
                     ],
                   ),
                 ),
-              ),
-              SizedBox(
-                height: MediaQuery.of(context).size.height * 0.35,
-                child: NumberKeypad(
-                  onKeyPressed: _onKeyPressed,
-                  onDelete: _onDelete,
-                ),
-              ),
-            ],
-          ),
-          _buildHeaderButtons(),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildAmountDisplay() {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.center,
-      mainAxisAlignment: MainAxisAlignment.end,
-      children: [
-        const Text(
-          '¥ ',
-          style: TextStyle(
-            fontSize: 44,
-            color: Colors.black,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-        Expanded(
-          child: Container(
-            alignment: Alignment.centerRight,
-            padding: const EdgeInsets.symmetric(vertical: 5),
-            decoration: const BoxDecoration(
-              border: Border(
-                bottom: BorderSide(color: Colors.black12, width: 2),
-              ),
-            ),
-            child: Text(
-              _amountController.text.isEmpty ? '0' : _amountController.text,
-              style: const TextStyle(
-                fontSize: 44,
-                fontWeight: FontWeight.bold,
-                color: Colors.black,
-              ),
-            ),
-          ),
-        ),
-        const SizedBox(width: 10),
-        Padding(
-          padding: const EdgeInsets.only(top: 12),
-          child: IconButton(
-            onPressed: _pickDate,
-            icon: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(Icons.calendar_today, size: 20, color: Colors.blue),
-                const SizedBox(height: 2),
-                Text(
-                  "${_selectedDate.month}/${_selectedDate.day}",
-                  style: const TextStyle(
-                    fontSize: 11,
-                    color: Colors.blue,
-                    fontWeight: FontWeight.bold,
-                  ),
+                const SizedBox(width: 16),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text(
+                      'Lv.$_currentLevel',
+                      style: GoogleFonts.pressStart2p(
+                        color: Colors.yellowAccent,
+                        fontSize: 20,
+                        shadows: [
+                          const Shadow(color: Colors.orange, blurRadius: 10),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 5),
+                    SizedBox(
+                      width: 100,
+                      height: 6,
+                      child: LinearProgressIndicator(
+                        value: _xpProgress,
+                        backgroundColor: Colors.grey.withOpacity(0.3),
+                        color: Colors.greenAccent,
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),
           ),
-        ),
-      ],
-    );
-  }
 
-  Widget _buildActionButtons() {
-    final hasMemo = _currentMemo.isNotEmpty;
-    return Row(
-      children: [
-        // ▼▼ 「次へ」を削除し、「メモ」ボタンを配置 ▼▼
-        IconButton.filledTonal(
-          onPressed: _showMemoDialog,
-          icon: Icon(
-            hasMemo ? Icons.note : Icons.note_add_outlined,
-            color: hasMemo ? Colors.blue : Colors.grey,
-          ),
-          style: IconButton.styleFrom(
-            padding: const EdgeInsets.all(16),
-            backgroundColor: hasMemo
-                ? Colors.blue.shade100
-                : Colors.grey.shade100,
-          ),
-        ),
-        const SizedBox(width: 10),
-        // ▼▼ 保存ボタンを大きく配置 ▼▼
-        Expanded(
-          child: ElevatedButton(
-            onPressed: () {
-              _saveData();
-            },
-            style: ElevatedButton.styleFrom(
-              padding: const EdgeInsets.symmetric(vertical: 16), // 少し高さを出す
-              backgroundColor: Colors.blue,
-              foregroundColor: Colors.white,
-              elevation: 2,
-            ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                const Icon(Icons.check),
-                const SizedBox(width: 8),
-                Text(
-                  '保存する',
-                  style: const TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                  ),
+          // 3. コックピット（下半分）
+          Align(
+            alignment: Alignment.bottomCenter,
+            child: Container(
+              height: MediaQuery.of(context).size.height * 0.55,
+              decoration: BoxDecoration(
+                color: const Color(0xFF111122),
+                borderRadius: const BorderRadius.vertical(
+                  top: Radius.circular(30),
                 ),
-                if (hasMemo) ...[
-                  const SizedBox(width: 8),
-                  const Text(
-                    '(メモあり)',
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.normal,
-                    ),
+                border: const Border(
+                  top: BorderSide(color: Colors.cyan, width: 2),
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.cyanAccent.withOpacity(0.2),
+                    blurRadius: 20,
+                    offset: const Offset(0, -5),
                   ),
                 ],
-              ],
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildHeaderButtons() {
-    final isFixedMode = _shortcuts.length <= 4;
-    return Positioned(
-      top: 60,
-      left: 0,
-      right: 0,
-      height: 60,
-      child: Stack(
-        alignment: Alignment.centerLeft,
-        children: [
-          if (isFixedMode)
-            Positioned(
-              left: 70,
-              right: 15,
-              top: 0,
-              bottom: 0,
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: _shortcuts.map((item) {
-                  return _buildCircleButton(
-                    icon: item.icon,
-                    color: item.color,
-                    onTap: () => _navigateToHistory(item),
-                  );
-                }).toList(),
               ),
-            )
-          else
-            Positioned.fill(
-              child: Stack(
+              child: Column(
                 children: [
-                  ListView.builder(
-                    scrollDirection: Axis.horizontal,
-                    padding: const EdgeInsets.only(left: 70, right: 20),
-                    physics: const BouncingScrollPhysics(),
-                    itemCount: _shortcuts.length,
-                    itemBuilder: (context, index) {
-                      final item = _shortcuts[index];
-                      return Padding(
-                        padding: const EdgeInsets.only(right: 12),
-                        child: _buildCircleButton(
-                          icon: item.icon,
-                          color: item.color,
-                          onTap: () => _navigateToHistory(item),
-                        ),
-                      );
-                    },
+                  _buildStatusDisplay(),
+
+                  // カテゴリ選択エリア
+                  Expanded(
+                    flex: 2,
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 15,
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            "TARGET CLASS",
+                            style: GoogleFonts.pressStart2p(
+                              color: Colors.grey,
+                              fontSize: 8,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          CategorySelector(
+                            tags: expenseTags,
+                            selectedIndex: _selectedExpenseIndex,
+                            rowCount: 1,
+                            onSelected: (i) =>
+                                setState(() => _selectedExpenseIndex = i),
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
-                  Positioned(
-                    left: 0,
-                    width: 80,
-                    top: 0,
-                    bottom: 0,
-                    child: Container(
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          colors: [
-                            Colors.white.withOpacity(1.0),
-                            Colors.white.withOpacity(0.0),
-                          ],
-                          begin: Alignment.centerLeft,
-                          end: Alignment.centerRight,
-                          stops: const [0.6, 1.0],
-                        ),
+
+                  // キーパッド＆アクションエリア
+                  Expanded(
+                    flex: 6,
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Expanded(
+                            flex: 3,
+                            child: NumberKeypad(
+                              onKeyPressed: _onKeyPressed,
+                              onDelete: _onDelete,
+                            ),
+                          ),
+                          const SizedBox(width: 15),
+                          Expanded(
+                            flex: 1,
+                            child: Column(
+                              children: [
+                                _buildSideButton(
+                                  icon: Icons.calendar_today,
+                                  label:
+                                      "${_selectedDate.month}/${_selectedDate.day}",
+                                  color: Colors.orangeAccent.withOpacity(0.2),
+                                  textColor: Colors.orangeAccent,
+                                  onTap: _pickDate,
+                                ),
+                                const SizedBox(height: 10),
+                                _buildSideButton(
+                                  icon: _currentMemo.isNotEmpty
+                                      ? Icons.note
+                                      : Icons.note_add_outlined,
+                                  label: "MEMO",
+                                  color: _currentMemo.isNotEmpty
+                                      ? Colors.cyan.withOpacity(0.4)
+                                      : Colors.white10,
+                                  textColor: _currentMemo.isNotEmpty
+                                      ? Colors.cyanAccent
+                                      : Colors.grey,
+                                  onTap: _showMemoDialog,
+                                ),
+                                const SizedBox(height: 10),
+                                Expanded(
+                                  child: Container(
+                                    decoration: BoxDecoration(
+                                      borderRadius: BorderRadius.circular(12),
+                                      gradient: const LinearGradient(
+                                        colors: [
+                                          Color(0xFFFF4444),
+                                          Color(0xFF990000),
+                                        ],
+                                        begin: Alignment.topLeft,
+                                        end: Alignment.bottomRight,
+                                      ),
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: Colors.redAccent.withOpacity(
+                                            0.5,
+                                          ),
+                                          blurRadius: 10,
+                                          offset: const Offset(0, 4),
+                                        ),
+                                      ],
+                                      border: Border.all(
+                                        color: Colors.redAccent,
+                                        width: 2,
+                                      ),
+                                    ),
+                                    child: Material(
+                                      color: Colors.transparent,
+                                      child: InkWell(
+                                        borderRadius: BorderRadius.circular(12),
+                                        onTap: _executeAttack,
+                                        child: Column(
+                                          mainAxisAlignment:
+                                              MainAxisAlignment.center,
+                                          children: [
+                                            const Icon(
+                                              Icons.flash_on,
+                                              size: 36,
+                                              color: Colors.white,
+                                            ),
+                                            const SizedBox(height: 4),
+                                            Text(
+                                              'ATTACK',
+                                              style: GoogleFonts.pressStart2p(
+                                                fontSize: 10,
+                                                color: Colors.white,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   ),
                 ],
               ),
             ),
+          ),
+
+          // 4. 右側メニュー (Achievements, Familiar, Shop)
           Positioned(
-            left: 15,
-            child: _buildCircleButton(
-              icon: Icons.menu,
-              color: Colors.blue,
-              onTap: () => _scaffoldKey.currentState?.openDrawer(),
+            top: 100,
+            right: 20,
+            child: Column(
+              children: [
+                _buildSquareIconButton(
+                  icon: Icons.menu,
+                  color: Colors.cyanAccent,
+                  onTap: () => _scaffoldKey.currentState?.openDrawer(),
+                ),
+                const SizedBox(height: 15),
+                _buildSquareIconButton(
+                  icon: Icons.emoji_events,
+                  color: Colors.yellowAccent,
+                  onTap: () async {
+                    await Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => const AchievementsScreen(),
+                      ),
+                    );
+                    _loadPlayerStats();
+                  },
+                ),
+                const SizedBox(height: 15),
+                _buildSquareIconButton(
+                  icon: Icons.egg,
+                  color: Colors.greenAccent,
+                  onTap: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => const FamiliarScreen(),
+                      ),
+                    );
+                  },
+                ),
+                const SizedBox(height: 15),
+                // ショップボタン (THE DARK WEB)
+                _buildSquareIconButton(
+                  icon: Icons.shopping_cart,
+                  color: Colors.redAccent,
+                  onTap: () async {
+                    await Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => const ShopScreen(),
+                      ),
+                    );
+                    // 戻ってきたら最新データを反映
+                    _loadPlayerStats();
+                    _loadShopData();
+                  },
+                ),
+              ],
+            ),
+          ),
+
+          // 5. 実績解除ポップアップ (カスタム)
+          Positioned(
+            right: 75, // 右メニューの左
+            top: 220, // トロフィーアイコン付近の高さ
+            child: AnimatedOpacity(
+              opacity: _isAchievementVisible ? 1.0 : 0.0,
+              duration: const Duration(milliseconds: 300),
+              child: _displayingAchievement != null
+                  ? Container(
+                      width: 200,
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withOpacity(0.9),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                          color: Colors.yellowAccent,
+                          width: 2,
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.yellow.withOpacity(0.3),
+                            blurRadius: 10,
+                          ),
+                        ],
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              const Icon(
+                                Icons.emoji_events,
+                                color: Colors.yellowAccent,
+                                size: 20,
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
+                                "UNLOCKED!",
+                                style: GoogleFonts.pressStart2p(
+                                  fontSize: 10,
+                                  color: Colors.yellow,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            _displayingAchievement!.title,
+                            style: GoogleFonts.orbitron(
+                              fontSize: 14,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.white,
+                            ),
+                          ),
+                        ],
+                      ),
+                    )
+                  : const SizedBox.shrink(),
             ),
           ),
         ],
@@ -2357,37 +3546,934 @@ class _InputScreenState extends State<InputScreen> {
     );
   }
 
-  void _navigateToHistory(ShortcutItem item) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (context) => HistoryScreen(
-          filterValue: item.label,
-          filterKey: item.key,
-          color: item.color,
-        ),
-      ),
-    );
-  }
-
-  Widget _buildCircleButton({
+  Widget _buildSquareIconButton({
     required IconData icon,
     required Color color,
     required VoidCallback onTap,
   }) {
     return Container(
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        shape: BoxShape.circle,
-        boxShadow: [
-          BoxShadow(color: Colors.black12, blurRadius: 5, offset: Offset(0, 2)),
-        ],
+      width: 44,
+      height: 44,
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.05),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: color.withOpacity(0.8)),
+        boxShadow: [BoxShadow(color: color.withOpacity(0.2), blurRadius: 8)],
       ),
       child: IconButton(
-        icon: Icon(icon, color: color, size: 24),
+        padding: EdgeInsets.zero,
+        icon: Icon(icon, color: color),
         onPressed: onTap,
-        constraints: const BoxConstraints(minWidth: 45, minHeight: 45),
-        style: IconButton.styleFrom(padding: const EdgeInsets.all(8)),
+      ),
+    );
+  }
+
+  Widget _buildStatusDisplay() {
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(20, 20, 20, 0),
+      padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 20),
+      decoration: BoxDecoration(
+        color: Colors.black,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.white24, width: 2),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(
+            'CHARGE MODE',
+            style: GoogleFonts.vt323(fontSize: 18, color: Colors.greenAccent),
+          ),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.baseline,
+            textBaseline: TextBaseline.alphabetic,
+            children: [
+              Text(
+                _amountController.text.isEmpty ? '0' : _amountController.text,
+                style: GoogleFonts.orbitron(
+                  fontSize: 32,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.cyanAccent,
+                  shadows: [const Shadow(color: Colors.cyan, blurRadius: 10)],
+                ),
+              ),
+              const SizedBox(width: 5),
+              Text(
+                'G',
+                style: GoogleFonts.pressStart2p(
+                  fontSize: 12,
+                  color: Colors.orange,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSideButton({
+    required IconData icon,
+    required String label,
+    required Color color,
+    required Color textColor,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        decoration: BoxDecoration(
+          color: color,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: textColor.withOpacity(0.5)),
+        ),
+        child: Column(
+          children: [
+            Icon(icon, size: 18, color: textColor),
+            const SizedBox(height: 2),
+            Text(
+              label,
+              style: GoogleFonts.vt323(
+                fontSize: 14,
+                fontWeight: FontWeight.bold,
+                color: textColor,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+```
+
+
+--- FILE: lib/screens/shop_screen.dart ---
+```dart
+import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
+import '../models/shop_item.dart';
+import '../repositories/player_repository.dart';
+
+class ShopScreen extends StatefulWidget {
+  const ShopScreen({super.key});
+
+  @override
+  State<ShopScreen> createState() => _ShopScreenState();
+}
+
+class _ShopScreenState extends State<ShopScreen> {
+  final PlayerRepository _repository = PlayerRepository();
+  int _currentCp = 0;
+  List<String> _purchasedIds = [];
+  String? _equippedSkin;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadData();
+  }
+
+  Future<void> _loadData() async {
+    final stats = await _repository.getPlayerStats();
+    final purchased = await _repository.getPurchasedItemIds();
+    final skin = await _repository.getEquippedSkin();
+    setState(() {
+      _currentCp = stats['cp'];
+      _purchasedIds = purchased;
+      _equippedSkin = skin;
+    });
+  }
+
+  Future<void> _purchase(ShopItem item) async {
+    final success = await _repository.purchaseItem(item);
+    if (success) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("TRANSACTION COMPLETE"),
+          backgroundColor: Colors.green,
+        ),
+      );
+      _loadData();
+    } else {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("INSUFFICIENT FUNDS"),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
+  Future<void> _equip(String skinId) async {
+    // 既に装備中なら外す（トグル）
+    if (_equippedSkin == skinId) {
+      await _repository.equipSkin(null);
+    } else {
+      await _repository.equipSkin(skinId);
+    }
+    _loadData();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFF050505), // 深い黒
+      appBar: AppBar(
+        title: Text(
+          'THE DARK WEB',
+          style: GoogleFonts.vt323(fontSize: 24, color: Colors.redAccent),
+        ),
+        centerTitle: true,
+        backgroundColor: Colors.black,
+        iconTheme: const IconThemeData(color: Colors.redAccent),
+        actions: [
+          Center(
+            child: Padding(
+              padding: const EdgeInsets.only(right: 16),
+              child: Text(
+                'CP: $_currentCp',
+                style: GoogleFonts.vt323(color: Colors.white, fontSize: 16),
+              ),
+            ),
+          ),
+        ],
+      ),
+      body: ListView.builder(
+        padding: const EdgeInsets.all(16),
+        itemCount: darkWebItems.length,
+        itemBuilder: (context, index) {
+          final item = darkWebItems[index];
+          final isPurchased = _purchasedIds.contains(item.id);
+          final isEquipped =
+              item.type == ShopItemType.skin &&
+              _equippedSkin == item.skinAssetId;
+
+          return Container(
+            margin: const EdgeInsets.only(bottom: 16),
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: const Color(0xFF111111),
+              border: Border.all(
+                color: isPurchased
+                    ? Colors.grey
+                    : Colors.redAccent.withOpacity(0.5),
+              ),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(
+              children: [
+                // アイコン
+                Container(
+                  width: 50,
+                  height: 50,
+                  decoration: BoxDecoration(
+                    color: Colors.black,
+                    border: Border.all(
+                      color: Colors.redAccent.withOpacity(0.3),
+                    ),
+                  ),
+                  child: Icon(
+                    item.type == ShopItemType.multiplier
+                        ? Icons.bolt
+                        : Icons.palette,
+                    color: isPurchased ? Colors.grey : Colors.redAccent,
+                  ),
+                ),
+                const SizedBox(width: 16),
+                // 情報
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        item.name,
+                        style: GoogleFonts.vt323(
+                          color: Colors.white,
+                          fontSize: 20,
+                        ),
+                      ),
+                      Text(
+                        item.description,
+                        style: const TextStyle(
+                          color: Colors.grey,
+                          fontSize: 12,
+                        ),
+                      ),
+                      const SizedBox(height: 5),
+                      Text(
+                        "PRICE: ${item.price} CP",
+                        style: GoogleFonts.vt323(
+                          color: Colors.yellow,
+                          fontSize: 14,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                // ボタン
+                if (!isPurchased)
+                  ElevatedButton(
+                    onPressed: () => _purchase(item),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.redAccent,
+                      foregroundColor: Colors.black,
+                    ),
+                    child: const Text("BUY"),
+                  )
+                else if (item.type == ShopItemType.skin)
+                  ElevatedButton(
+                    onPressed: () => _equip(item.skinAssetId!),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: isEquipped
+                          ? Colors.green
+                          : Colors.grey.shade800,
+                      foregroundColor: Colors.white,
+                    ),
+                    child: Text(isEquipped ? "USED" : "EQUIP"),
+                  )
+                else
+                  const Text(
+                    "OWNED",
+                    style: TextStyle(
+                      color: Colors.grey,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+```
+
+
+--- FILE: lib/screens/achievements_screen.dart ---
+```dart
+import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
+import '../models/achievement.dart';
+import '../repositories/player_repository.dart';
+
+class AchievementsScreen extends StatefulWidget {
+  const AchievementsScreen({super.key});
+
+  @override
+  State<AchievementsScreen> createState() => _AchievementsScreenState();
+}
+
+class _AchievementsScreenState extends State<AchievementsScreen> {
+  final PlayerRepository _repository = PlayerRepository();
+  List<String> _unlockedIds = [];
+  int _inputCount = 0;
+  int _totalAmount = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadData();
+  }
+
+  Future<void> _loadData() async {
+    final stats = await _repository.getPlayerStats();
+    // もしここでエラーが出る場合は、手順1のメソッドをPlayerRepositoryに追加してください
+    final ids = await _repository.getUnlockedAchievementIds();
+
+    setState(() {
+      _inputCount = stats['inputCount'];
+      // 【修正箇所】 totalAmount ではなく cp (Combat Power) を取得します
+      _totalAmount = stats['cp'] ?? 0;
+      _unlockedIds = ids;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // 解除率計算
+    final progress = _unlockedIds.length / allAchievements.length;
+
+    return Scaffold(
+      backgroundColor: const Color(0xFF111122),
+      appBar: AppBar(
+        title: Text(
+          'TROPHY ROOM',
+          style: GoogleFonts.pressStart2p(fontSize: 16),
+        ),
+        backgroundColor: Colors.black,
+        foregroundColor: Colors.white,
+        elevation: 0,
+      ),
+      body: Column(
+        children: [
+          // ヘッダー部分（進捗表示）
+          Container(
+            padding: const EdgeInsets.all(20),
+            decoration: const BoxDecoration(
+              color: Colors.black,
+              border: Border(bottom: BorderSide(color: Colors.cyan, width: 2)),
+            ),
+            child: Row(
+              children: [
+                CircularProgressIndicator(
+                  value: progress,
+                  backgroundColor: Colors.grey.shade800,
+                  color: Colors.cyanAccent,
+                  strokeWidth: 8,
+                ),
+                const SizedBox(width: 20),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'UNLOCK PROGRESS',
+                      style: GoogleFonts.vt323(
+                        color: Colors.grey,
+                        fontSize: 18,
+                      ),
+                    ),
+                    Text(
+                      '${(progress * 100).toInt()}% COMPLETE',
+                      style: GoogleFonts.orbitron(
+                        color: Colors.cyanAccent,
+                        fontSize: 24,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 5),
+                    Text(
+                      'TOTAL HITS: $_inputCount / TOTAL DMG: ¥$_totalAmount',
+                      style: const TextStyle(
+                        color: Colors.white54,
+                        fontSize: 10,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+
+          // 実績リスト
+          Expanded(
+            child: ListView.builder(
+              padding: const EdgeInsets.all(10),
+              itemCount: allAchievements.length,
+              itemBuilder: (context, index) {
+                final item = allAchievements[index];
+                final isUnlocked = _unlockedIds.contains(item.id);
+
+                return _buildAchievementTile(item, isUnlocked);
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAchievementTile(Achievement item, bool isUnlocked) {
+    final color = isUnlocked ? Colors.cyanAccent : Colors.grey;
+    final bgColor = isUnlocked
+        ? Colors.cyan.withOpacity(0.1)
+        : Colors.white.withOpacity(0.05);
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      decoration: BoxDecoration(
+        color: bgColor,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: isUnlocked ? Colors.cyan.withOpacity(0.5) : Colors.white10,
+        ),
+      ),
+      child: ListTile(
+        leading: Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: Colors.black,
+            shape: BoxShape.circle,
+            border: Border.all(color: color.withOpacity(0.5)),
+            boxShadow: isUnlocked
+                ? [BoxShadow(color: color.withOpacity(0.3), blurRadius: 10)]
+                : [],
+          ),
+          child: Icon(
+            isUnlocked ? item.icon : Icons.lock,
+            color: color,
+            size: 24,
+          ),
+        ),
+        title: Text(
+          isUnlocked ? item.title : '???',
+          style: GoogleFonts.pressStart2p(
+            color: isUnlocked ? Colors.white : Colors.white38,
+            fontSize: 10,
+          ),
+        ),
+        subtitle: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const SizedBox(height: 5),
+            Text(
+              isUnlocked ? item.description : 'Unlock condition hidden',
+              style: GoogleFonts.vt323(
+                color: isUnlocked ? Colors.white70 : Colors.white24,
+                fontSize: 16,
+              ),
+            ),
+            if (!isUnlocked)
+              Text(
+                item.type == AchievementType.inputCount
+                    ? 'Hint: Keep attacking... (${item.threshold} hits)'
+                    : 'Hint: Increase damage... (¥${item.threshold})',
+                style: const TextStyle(color: Colors.grey, fontSize: 10),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+```
+
+
+--- FILE: lib/screens/familiar_screen.dart ---
+```dart
+import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
+import '../models/familiar.dart';
+import '../repositories/familiar_repository.dart';
+
+class FamiliarScreen extends StatefulWidget {
+  const FamiliarScreen({super.key});
+
+  @override
+  State<FamiliarScreen> createState() => _FamiliarScreenState();
+}
+
+class _FamiliarScreenState extends State<FamiliarScreen>
+    with SingleTickerProviderStateMixin {
+  final FamiliarRepository _repository = FamiliarRepository();
+
+  int _currentClicks = 0;
+  int _requiredClicks = 10;
+  List<Familiar> _myCollection = [];
+
+  late AnimationController _pulseController;
+
+  @override
+  void initState() {
+    super.initState();
+    _pulseController = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 2),
+    )..repeat(reverse: true);
+
+    _loadData();
+  }
+
+  @override
+  void dispose() {
+    _pulseController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadData() async {
+    final status = await _repository.getEggStatus();
+    final collection = await _repository.getMyCollection();
+    setState(() {
+      _currentClicks = status['current']!;
+      _requiredClicks = status['required']!;
+      _myCollection = collection;
+    });
+  }
+
+  Future<void> _tryHatch() async {
+    if (_currentClicks < _requiredClicks) return;
+
+    final newFamiliar = await _repository.hatchEgg();
+    if (newFamiliar != null) {
+      if (!mounted) return;
+      // 孵化演出ダイアログ
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => _buildHatchDialog(newFamiliar),
+      );
+      _loadData(); // データ更新
+    }
+  }
+
+  // ★★★ 新規追加: 詳細閲覧ダイアログ ★★★
+  void _showDetailDialog(Familiar familiar) {
+    showDialog(
+      context: context,
+      builder: (context) => Dialog(
+        backgroundColor: Colors.transparent,
+        child: Container(
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            color: const Color(0xFF0A0A12).withOpacity(0.95), // 背景を少し透過させてサイバー感
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: familiar.color, width: 2),
+            boxShadow: [
+              BoxShadow(
+                color: familiar.color.withOpacity(0.3),
+                blurRadius: 20,
+                spreadRadius: 2,
+              ),
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                "FAMILIAR DATA",
+                style: GoogleFonts.orbitron(
+                  color: Colors.white54,
+                  fontSize: 12,
+                  letterSpacing: 2,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 20),
+
+              // アイコン
+              Text(familiar.emoji, style: const TextStyle(fontSize: 80)),
+
+              const SizedBox(height: 15),
+
+              // 名前
+              Text(
+                familiar.name,
+                style: GoogleFonts.pressStart2p(
+                  color: familiar.color,
+                  fontSize: 16,
+                ),
+                textAlign: TextAlign.center,
+              ),
+
+              const SizedBox(height: 10),
+
+              // レアリティ
+              Text(
+                "★" * familiar.rarity,
+                style: const TextStyle(color: Colors.yellow, fontSize: 14),
+              ),
+
+              const SizedBox(height: 20),
+
+              // 説明文エリア
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(15),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.05),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.white12),
+                ),
+                child: Text(
+                  familiar.description,
+                  textAlign: TextAlign.center,
+                  style: GoogleFonts.vt323(color: Colors.white, fontSize: 20),
+                ),
+              ),
+
+              const SizedBox(height: 20),
+
+              // 閉じるボタン
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton(
+                  onPressed: () => Navigator.pop(context),
+                  style: OutlinedButton.styleFrom(
+                    side: const BorderSide(color: Colors.white24),
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                  ),
+                  child: Text(
+                    "CLOSE",
+                    style: GoogleFonts.vt323(color: Colors.white, fontSize: 18),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final progress = (_currentClicks / _requiredClicks).clamp(0.0, 1.0);
+    final canHatch = _currentClicks >= _requiredClicks;
+
+    return Scaffold(
+      backgroundColor: const Color(0xFF0A0A12),
+      appBar: AppBar(
+        title: Text('BIO-LAB', style: GoogleFonts.pressStart2p(fontSize: 16)),
+        backgroundColor: Colors.black,
+        foregroundColor: Colors.white,
+        actions: [
+          Center(
+            child: Padding(
+              padding: const EdgeInsets.only(right: 16),
+              child: Text(
+                'COLLECTION: ${_myCollection.length}/${familiarMasterList.length}',
+                style: GoogleFonts.vt323(
+                  color: Colors.greenAccent,
+                  fontSize: 16,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+      body: Column(
+        children: [
+          // 上部：卵（培養槽）エリア
+          Container(
+            height: 300,
+            width: double.infinity,
+            decoration: const BoxDecoration(
+              border: Border(
+                bottom: BorderSide(color: Colors.greenAccent, width: 2),
+              ),
+              gradient: LinearGradient(
+                colors: [Colors.black, Color(0xFF001100)],
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+              ),
+            ),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  canHatch ? "INCUBATION COMPLETE" : "INCUBATING...",
+                  style: GoogleFonts.orbitron(
+                    color: canHatch ? Colors.redAccent : Colors.greenAccent,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 2,
+                  ),
+                ),
+                const SizedBox(height: 20),
+
+                // 卵本体
+                GestureDetector(
+                  onTap: canHatch ? _tryHatch : null,
+                  child: ScaleTransition(
+                    scale: Tween<double>(
+                      begin: 0.95,
+                      end: 1.05,
+                    ).animate(_pulseController),
+                    child: Container(
+                      width: 120,
+                      height: 150,
+                      decoration: BoxDecoration(
+                        color: Colors.black,
+                        borderRadius: BorderRadius.circular(60),
+                        border: Border.all(
+                          color: canHatch
+                              ? Colors.redAccent
+                              : Colors.greenAccent,
+                          width: 4,
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: canHatch
+                                ? Colors.red.withOpacity(0.5)
+                                : Colors.green.withOpacity(0.3),
+                            blurRadius: 30,
+                            spreadRadius: 5,
+                          ),
+                        ],
+                      ),
+                      child: Center(
+                        child: Text(
+                          canHatch ? "!" : "${(progress * 100).toInt()}%",
+                          style: GoogleFonts.vt323(
+                            color: Colors.white,
+                            fontSize: 32,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+
+                const SizedBox(height: 30),
+
+                // プログレスバー
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 50),
+                  child: Column(
+                    children: [
+                      LinearProgressIndicator(
+                        value: progress,
+                        minHeight: 10,
+                        backgroundColor: Colors.grey.shade900,
+                        color: canHatch ? Colors.redAccent : Colors.greenAccent,
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        canHatch
+                            ? "TAP EGG TO HATCH!"
+                            : "DATA INPUT REQUIRED: $_currentClicks / $_requiredClicks",
+                        style: GoogleFonts.vt323(
+                          color: Colors.grey,
+                          fontSize: 14,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          // 下部：コレクションリスト（修正済み）
+          Expanded(
+            child: _myCollection.isEmpty
+                ? Center(
+                    child: Text(
+                      "NO FAMILIARS FOUND",
+                      style: GoogleFonts.vt323(
+                        color: Colors.white24,
+                        fontSize: 24,
+                      ),
+                    ),
+                  )
+                : GridView.builder(
+                    padding: const EdgeInsets.all(16),
+                    gridDelegate:
+                        const SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: 3,
+                          childAspectRatio: 0.8,
+                          crossAxisSpacing: 10,
+                          mainAxisSpacing: 10,
+                        ),
+                    itemCount: _myCollection.length,
+                    itemBuilder: (context, index) {
+                      final familiar = _myCollection[index];
+                      // ★★★ InkWellでラップしてタップ可能にする ★★★
+                      return Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          onTap: () => _showDetailDialog(familiar), // タップで詳細表示
+                          borderRadius: BorderRadius.circular(8),
+                          child: Container(
+                            decoration: BoxDecoration(
+                              color: Colors.white.withOpacity(0.05),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(
+                                color: familiar.color.withOpacity(0.5),
+                              ),
+                            ),
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Text(
+                                  familiar.emoji,
+                                  style: const TextStyle(fontSize: 40),
+                                ),
+                                const SizedBox(height: 5),
+                                Text(
+                                  familiar.name,
+                                  textAlign: TextAlign.center,
+                                  style: GoogleFonts.vt323(
+                                    color: Colors.white,
+                                    fontSize: 14,
+                                  ),
+                                ),
+                                Text(
+                                  "★" * familiar.rarity,
+                                  style: const TextStyle(
+                                    color: Colors.yellow,
+                                    fontSize: 10,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHatchDialog(Familiar familiar) {
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      child: Container(
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: Colors.black,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: familiar.color, width: 3),
+          boxShadow: [
+            BoxShadow(color: familiar.color.withOpacity(0.5), blurRadius: 20),
+          ],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              "NEW LIFEFORM DETECTED!",
+              textAlign: TextAlign.center,
+              style: GoogleFonts.orbitron(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 20),
+            Text(familiar.emoji, style: const TextStyle(fontSize: 80)),
+            const SizedBox(height: 10),
+            Text(
+              familiar.name,
+              style: GoogleFonts.pressStart2p(
+                color: familiar.color,
+                fontSize: 14,
+              ),
+            ),
+            const SizedBox(height: 5),
+            Text(
+              "★" * familiar.rarity,
+              style: const TextStyle(color: Colors.yellow, fontSize: 14),
+            ),
+            const SizedBox(height: 20),
+            Text(
+              familiar.description,
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: Colors.white70),
+            ),
+            const SizedBox(height: 20),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(context),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: familiar.color,
+                foregroundColor: Colors.black,
+              ),
+              child: const Text("CONFIRM"),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -2690,6 +4776,7 @@ class _MonthPageState extends State<MonthPage> {
 --- FILE: lib/widgets/category_selector.dart ---
 ```dart
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 import '../models/category_tag.dart';
 
 class CategorySelector extends StatelessWidget {
@@ -2709,30 +4796,56 @@ class CategorySelector extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      height: rowCount == 2 ? 100 : 50,
-      child: GridView.builder(
+      height: 40, // 高さを少しコンパクトに
+      child: ListView.separated(
         scrollDirection: Axis.horizontal,
-        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: rowCount,
-          mainAxisSpacing: 6,
-          crossAxisSpacing: 6,
-          childAspectRatio: rowCount == 2 ? 0.45 : 0.4,
-        ),
         itemCount: tags.length,
+        separatorBuilder: (context, index) => const SizedBox(width: 8),
         itemBuilder: (context, index) {
           final tag = tags[index];
           final isSelected = selectedIndex == index;
-          return ChoiceChip(
-            label: Text(tag.label, style: const TextStyle(fontSize: 12)),
-            selected: isSelected,
-            onSelected: (_) => onSelected(index),
-            shape: tag.isCircle
-                ? const StadiumBorder()
-                : RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8),
+
+          // 色の決定（選択時はタグの色、非選択時は暗い色）
+          final baseColor = tag.color;
+          final bgColor = isSelected
+              ? baseColor.withOpacity(0.2)
+              : Colors.transparent;
+          final borderColor = isSelected ? baseColor : Colors.white24;
+          final textColor = isSelected ? baseColor : Colors.white54;
+
+          return GestureDetector(
+            onTap: () => onSelected(index),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: bgColor,
+                border: Border.all(
+                  color: borderColor,
+                  width: isSelected ? 2 : 1,
+                ),
+                borderRadius: BorderRadius.circular(4), // 角張らせてSF感を出す
+                boxShadow: isSelected
+                    ? [
+                        BoxShadow(
+                          color: baseColor.withOpacity(0.5),
+                          blurRadius: 8,
+                        ),
+                      ]
+                    : [],
+              ),
+              child: Center(
+                child: Text(
+                  tag.label,
+                  style: GoogleFonts.vt323(
+                    // レトロPC風フォントがあればベストだが、なければ標準でOK
+                    color: textColor,
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
                   ),
-            selectedColor: tag.color.withOpacity(0.3),
-            visualDensity: VisualDensity.compact,
+                ),
+              ),
+            ),
           );
         },
       ),
@@ -2878,6 +4991,7 @@ class AppDrawer extends StatelessWidget {
 --- FILE: lib/widgets/number_keypad.dart ---
 ```dart
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 class NumberKeypad extends StatelessWidget {
   final Function(String) onKeyPressed;
@@ -2892,8 +5006,8 @@ class NumberKeypad extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      color: Colors.white,
-      padding: const EdgeInsets.fromLTRB(10, 0, 10, 20), // 下に余白
+      // 背景色削除（親側で管理）
+      padding: const EdgeInsets.fromLTRB(0, 0, 10, 10),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -2912,7 +5026,7 @@ class NumberKeypad extends StatelessWidget {
         children: keys.map((key) {
           return Expanded(
             child: Padding(
-              padding: const EdgeInsets.all(4.0), // ボタン間の隙間
+              padding: const EdgeInsets.all(4.0),
               child: _buildButton(key),
             ),
           );
@@ -2925,8 +5039,7 @@ class NumberKeypad extends StatelessWidget {
     final isDelete = key == 'DEL';
 
     return Material(
-      color: isDelete ? Colors.red.shade50 : Colors.grey.shade50,
-      borderRadius: BorderRadius.circular(8),
+      color: Colors.transparent,
       child: InkWell(
         borderRadius: BorderRadius.circular(8),
         onTap: () {
@@ -2936,17 +5049,46 @@ class NumberKeypad extends StatelessWidget {
             onKeyPressed(key);
           }
         },
-        child: Center(
-          child: isDelete
-              ? const Icon(Icons.backspace_outlined, color: Colors.redAccent)
-              : Text(
-                  key,
-                  style: const TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.black87,
+        // ボタンのデザイン: 半透明の黒背景 + ネオンボーダー
+        child: Container(
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.05), // うっすら明るく
+            border: Border.all(
+              color: isDelete
+                  ? Colors.redAccent.withOpacity(0.3)
+                  : Colors.cyanAccent.withOpacity(0.1),
+              width: 1,
+            ),
+            borderRadius: BorderRadius.circular(8),
+            boxShadow: [
+              // 押せる感じの影（内側）
+              BoxShadow(
+                color: Colors.black.withOpacity(0.5),
+                blurRadius: 2,
+                offset: const Offset(2, 2),
+              ),
+            ],
+          ),
+          child: Center(
+            child: isDelete
+                ? const Icon(
+                    Icons.backspace_outlined,
+                    color: Colors.redAccent,
+                    size: 24,
+                  )
+                : Text(
+                    key,
+                    style: GoogleFonts.orbitron(
+                      // SFチックな数字フォント
+                      fontSize: 24,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.cyanAccent,
+                      shadows: [
+                        const Shadow(color: Colors.blue, blurRadius: 5),
+                      ],
+                    ),
                   ),
-                ),
+          ),
         ),
       ),
     );
