@@ -1,19 +1,30 @@
-import 'dart:math'; // Random用
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flame/game.dart';
 import 'package:google_fonts/google_fonts.dart';
+
+// Game & Models
 import '../game/kakeibo_game.dart';
 import '../models/category_tag.dart';
 import '../models/transaction_item.dart';
 import '../models/achievement.dart';
-import '../models/familiar.dart'; // Familiar, SkillType
+import '../models/familiar.dart';
+
+// Repositories
 import '../repositories/transaction_repository.dart';
 import '../repositories/settings_repository.dart';
 import '../repositories/player_repository.dart';
 import '../repositories/familiar_repository.dart';
+
+// Widgets
 import '../widgets/category_selector.dart';
 import '../widgets/app_drawer.dart';
 import '../widgets/number_keypad.dart';
+import '../widgets/stats_header.dart'; // 新規追加
+import '../widgets/buddy_display.dart'; // 新規追加
+import '../widgets/side_menu.dart'; // 新規追加
+
+// Screens
 import 'achievements_screen.dart';
 import 'familiar_screen.dart';
 import 'shop_screen.dart';
@@ -24,8 +35,7 @@ class InputScreen extends StatefulWidget {
   State<InputScreen> createState() => _InputScreenState();
 }
 
-class _InputScreenState extends State<InputScreen>
-    with SingleTickerProviderStateMixin {
+class _InputScreenState extends State<InputScreen> {
   final TextEditingController _amountController = TextEditingController();
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
 
@@ -53,17 +63,11 @@ class _InputScreenState extends State<InputScreen>
   bool _isAchievementVisible = false;
 
   Familiar? _currentBuddy;
-  late AnimationController _buddyAnimController;
   String? _skillActivationMessage;
 
   @override
   void initState() {
     super.initState();
-    _buddyAnimController = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 2),
-    )..repeat(reverse: true);
-
     _loadShortcuts();
     _loadPlayerStats();
     _loadShopData();
@@ -73,7 +77,6 @@ class _InputScreenState extends State<InputScreen>
   @override
   void dispose() {
     _amountController.dispose();
-    _buddyAnimController.dispose();
     super.dispose();
   }
 
@@ -329,65 +332,28 @@ class _InputScreenState extends State<InputScreen>
             child: ClipRect(child: GameWidget(game: _game)),
           ),
 
-          // 2. Stats
-          Positioned(top: 50, left: 20, right: 20, child: _buildStatsHeader()),
-
-          // 3. Buddy
-          if (_currentBuddy != null)
-            Positioned(
-              bottom: MediaQuery.of(context).size.height * 0.55 + 10,
-              right: 20,
-              child: AnimatedBuilder(
-                animation: _buddyAnimController,
-                builder: (context, child) {
-                  return Transform.translate(
-                    offset: Offset(0, _buddyAnimController.value * 10),
-                    child: Column(
-                      children: [
-                        if (_skillActivationMessage != null)
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 8,
-                              vertical: 4,
-                            ),
-                            margin: const EdgeInsets.only(bottom: 8),
-                            decoration: BoxDecoration(
-                              color: Colors.black.withOpacity(0.7),
-                              border: Border.all(color: Colors.yellowAccent),
-                              borderRadius: BorderRadius.circular(4),
-                            ),
-                            child: Text(
-                              _skillActivationMessage!,
-                              style: GoogleFonts.vt323(
-                                color: Colors.yellowAccent,
-                                fontSize: 14,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ),
-                        Container(
-                          padding: const EdgeInsets.all(8),
-                          decoration: BoxDecoration(
-                            color: Colors.black.withOpacity(0.4),
-                            shape: BoxShape.circle,
-                            boxShadow: [
-                              BoxShadow(
-                                color: _currentBuddy!.color.withOpacity(0.3),
-                                blurRadius: 15,
-                              ),
-                            ],
-                          ),
-                          child: Text(
-                            _currentBuddy!.emoji,
-                            style: const TextStyle(fontSize: 50),
-                          ),
-                        ),
-                      ],
-                    ),
-                  );
-                },
-              ),
+          // 2. Stats Header (リファクタリング適用)
+          Positioned(
+            top: 50,
+            left: 20,
+            right: 20,
+            child: StatsHeader(
+              cp: _totalCombatPower,
+              realSpending: _realSpending,
+              level: _currentLevel,
+              xpProgress: _xpProgress,
             ),
+          ),
+
+          // 3. Buddy Display (リファクタリング適用)
+          Positioned(
+            bottom: MediaQuery.of(context).size.height * 0.55 + 10,
+            right: 20,
+            child: BuddyDisplay(
+              buddy: _currentBuddy,
+              message: _skillActivationMessage,
+            ),
+          ),
 
           // 4. Cockpit (Bottom Half)
           Align(
@@ -413,6 +379,8 @@ class _InputScreenState extends State<InputScreen>
               child: Column(
                 children: [
                   _buildStatusDisplay(),
+
+                  // バディスキル名表示 (Target Classの上)
                   if (_currentBuddy != null)
                     Container(
                       width: double.infinity,
@@ -560,10 +528,8 @@ class _InputScreenState extends State<InputScreen>
                                                   Icons.flash_on,
                                                   size: 30,
                                                   color: Colors.white,
-                                                ), // サイズ微調整 36->30
-                                                const SizedBox(
-                                                  height: 2,
-                                                ), // 4->2
+                                                ),
+                                                const SizedBox(height: 2),
                                                 Text(
                                                   'ATTACK',
                                                   style:
@@ -592,61 +558,38 @@ class _InputScreenState extends State<InputScreen>
             ),
           ),
 
-          // 5. Right Menu
+          // 5. Right Menu (リファクタリング適用)
           Positioned(
             top: 100,
             right: 20,
-            child: Column(
-              children: [
-                _buildSquareIconButton(
-                  icon: Icons.menu,
-                  color: Colors.cyanAccent,
-                  onTap: () => _scaffoldKey.currentState?.openDrawer(),
-                ),
-                const SizedBox(height: 15),
-                _buildSquareIconButton(
-                  icon: Icons.emoji_events,
-                  color: Colors.yellowAccent,
-                  onTap: () async {
-                    await Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => const AchievementsScreen(),
-                      ),
-                    );
-                    _loadPlayerStats();
-                  },
-                ),
-                const SizedBox(height: 15),
-                _buildSquareIconButton(
-                  icon: Icons.egg,
-                  color: Colors.greenAccent,
-                  onTap: () async {
-                    await Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => const FamiliarScreen(),
-                      ),
-                    );
-                    _loadBuddy();
-                  },
-                ),
-                const SizedBox(height: 15),
-                _buildSquareIconButton(
-                  icon: Icons.shopping_cart,
-                  color: Colors.redAccent,
-                  onTap: () async {
-                    await Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => const ShopScreen(),
-                      ),
-                    );
-                    _loadPlayerStats();
-                    _loadShopData();
-                  },
-                ),
-              ],
+            child: SideMenu(
+              onMenuTap: () => _scaffoldKey.currentState?.openDrawer(),
+              onTrophyTap: () async {
+                await Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => const AchievementsScreen(),
+                  ),
+                );
+                _loadPlayerStats();
+              },
+              onEggTap: () async {
+                await Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => const FamiliarScreen(),
+                  ),
+                );
+                _loadBuddy();
+              },
+              onShopTap: () async {
+                await Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => const ShopScreen()),
+                );
+                _loadPlayerStats();
+                _loadShopData();
+              },
             ),
           ),
 
@@ -715,110 +658,6 @@ class _InputScreenState extends State<InputScreen>
     );
   }
 
-  Widget _buildStatsHeader() {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              FittedBox(
-                fit: BoxFit.scaleDown,
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  'COMBAT POWER',
-                  style: GoogleFonts.pressStart2p(
-                    color: Colors.cyanAccent,
-                    fontSize: 10,
-                  ),
-                ),
-              ),
-              const SizedBox(height: 5),
-              FittedBox(
-                fit: BoxFit.scaleDown,
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  '$_totalCombatPower',
-                  style: GoogleFonts.vt323(
-                    color: Colors.white,
-                    fontSize: 40,
-                    letterSpacing: 2,
-                    shadows: [const Shadow(color: Colors.blue, blurRadius: 15)],
-                  ),
-                ),
-              ),
-              Row(
-                children: [
-                  Icon(
-                    Icons.currency_yen,
-                    color: Colors.grey.shade600,
-                    size: 12,
-                  ),
-                  Text(
-                    "$_realSpending",
-                    style: GoogleFonts.vt323(
-                      color: Colors.grey.shade600,
-                      fontSize: 14,
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(width: 16),
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.end,
-          children: [
-            Text(
-              'Lv.$_currentLevel',
-              style: GoogleFonts.pressStart2p(
-                color: Colors.yellowAccent,
-                fontSize: 20,
-                shadows: [const Shadow(color: Colors.orange, blurRadius: 10)],
-              ),
-            ),
-            const SizedBox(height: 5),
-            SizedBox(
-              width: 100,
-              height: 6,
-              child: LinearProgressIndicator(
-                value: _xpProgress,
-                backgroundColor: Colors.grey.withOpacity(0.3),
-                color: Colors.greenAccent,
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-          ],
-        ),
-      ],
-    );
-  }
-
-  Widget _buildSquareIconButton({
-    required IconData icon,
-    required Color color,
-    required VoidCallback onTap,
-  }) {
-    return Container(
-      width: 44,
-      height: 44,
-      decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.05),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: color.withOpacity(0.8)),
-        boxShadow: [BoxShadow(color: color.withOpacity(0.2), blurRadius: 8)],
-      ),
-      child: IconButton(
-        padding: EdgeInsets.zero,
-        icon: Icon(icon, color: color),
-        onPressed: onTap,
-      ),
-    );
-  }
-
   Widget _buildStatusDisplay() {
     return Container(
       width: double.infinity,
@@ -876,7 +715,7 @@ class _InputScreenState extends State<InputScreen>
       borderRadius: BorderRadius.circular(8),
       child: Container(
         width: double.infinity,
-        padding: const EdgeInsets.symmetric(vertical: 8), // 10 -> 8 に縮小
+        padding: const EdgeInsets.symmetric(vertical: 8),
         decoration: BoxDecoration(
           color: color,
           borderRadius: BorderRadius.circular(8),
