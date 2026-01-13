@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 import '../models/category_tag.dart';
 
 class CategorySelector extends StatelessWidget {
@@ -18,30 +19,56 @@ class CategorySelector extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      height: rowCount == 2 ? 100 : 50,
-      child: GridView.builder(
+      height: 40, // 高さを少しコンパクトに
+      child: ListView.separated(
         scrollDirection: Axis.horizontal,
-        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: rowCount,
-          mainAxisSpacing: 6,
-          crossAxisSpacing: 6,
-          childAspectRatio: rowCount == 2 ? 0.45 : 0.4,
-        ),
         itemCount: tags.length,
+        separatorBuilder: (context, index) => const SizedBox(width: 8),
         itemBuilder: (context, index) {
           final tag = tags[index];
           final isSelected = selectedIndex == index;
-          return ChoiceChip(
-            label: Text(tag.label, style: const TextStyle(fontSize: 12)),
-            selected: isSelected,
-            onSelected: (_) => onSelected(index),
-            shape: tag.isCircle
-                ? const StadiumBorder()
-                : RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8),
+
+          // 色の決定（選択時はタグの色、非選択時は暗い色）
+          final baseColor = tag.color;
+          final bgColor = isSelected
+              ? baseColor.withOpacity(0.2)
+              : Colors.transparent;
+          final borderColor = isSelected ? baseColor : Colors.white24;
+          final textColor = isSelected ? baseColor : Colors.white54;
+
+          return GestureDetector(
+            onTap: () => onSelected(index),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: bgColor,
+                border: Border.all(
+                  color: borderColor,
+                  width: isSelected ? 2 : 1,
+                ),
+                borderRadius: BorderRadius.circular(4), // 角張らせてSF感を出す
+                boxShadow: isSelected
+                    ? [
+                        BoxShadow(
+                          color: baseColor.withOpacity(0.5),
+                          blurRadius: 8,
+                        ),
+                      ]
+                    : [],
+              ),
+              child: Center(
+                child: Text(
+                  tag.label,
+                  style: GoogleFonts.vt323(
+                    // レトロPC風フォントがあればベストだが、なければ標準でOK
+                    color: textColor,
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
                   ),
-            selectedColor: tag.color.withOpacity(0.3),
-            visualDensity: VisualDensity.compact,
+                ),
+              ),
+            ),
           );
         },
       ),
