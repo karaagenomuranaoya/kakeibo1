@@ -3,12 +3,14 @@ class TransactionItem {
   final String expense;
   final String payment;
   final DateTime date;
+  final String? memo; // 追加: 任意のメモ
 
   TransactionItem({
     required this.amount,
     required this.expense,
     required this.payment,
     required this.date,
+    this.memo,
   });
 
   // 表示用日付フォーマット
@@ -23,6 +25,7 @@ class TransactionItem {
       'expense': expense,
       'payment': payment,
       'date_iso': date.toIso8601String(),
+      'memo': memo, // 追加
     };
   }
 
@@ -33,6 +36,7 @@ class TransactionItem {
       expense: json['expense'] as String,
       payment: json['payment'] as String,
       date: DateTime.parse(json['date_iso'] as String),
+      memo: json['memo'] as String?, // 追加
     );
   }
 }

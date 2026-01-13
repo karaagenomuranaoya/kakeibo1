@@ -2,68 +2,86 @@ import 'package:flutter/material.dart';
 import '../models/category_tag.dart';
 import '../screens/monthly_report_screen.dart';
 import '../screens/history_screen.dart';
+import '../screens/settings_screen.dart'; // 設定画面
 
 class AppDrawer extends StatelessWidget {
-  const AppDrawer({super.key});
+  // 設定変更時にInputScreenを更新するためのコールバック
+  final VoidCallback? onSettingsChanged;
+
+  const AppDrawer({super.key, this.onSettingsChanged});
 
   @override
   Widget build(BuildContext context) {
     return Drawer(
-      child: ListView(
-        padding: EdgeInsets.zero,
+      child: Column(
+        // Columnに変更してSpacerを使えるようにする
         children: [
-          const DrawerHeader(
-            decoration: BoxDecoration(color: Colors.blue),
-            child: Text(
-              'メニュー',
-              style: TextStyle(color: Colors.white, fontSize: 24),
+          Expanded(
+            child: ListView(
+              padding: EdgeInsets.zero,
+              children: [
+                const DrawerHeader(
+                  decoration: BoxDecoration(color: Colors.blue),
+                  child: Text(
+                    'メニュー',
+                    style: TextStyle(color: Colors.white, fontSize: 24),
+                  ),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.calendar_month),
+                  title: const Text('月別レポート'),
+                  onTap: () {
+                    Navigator.pop(context);
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => const MonthlyHistoryScreen(),
+                      ),
+                    );
+                  },
+                ),
+                const Divider(),
+                _buildSectionHeader("費目別"),
+                _buildFilterTile(
+                  context,
+                  const CategoryTag('デフォルト', Colors.blueGrey),
+                  'expense',
+                ),
+                ...expenseTags.map(
+                  (tag) => _buildFilterTile(context, tag, 'expense'),
+                ),
+                const SizedBox(height: 15),
+                const Divider(),
+                _buildSectionHeader("支払い方法別"),
+                _buildFilterTile(
+                  context,
+                  const CategoryTag('デフォルト', Colors.grey),
+                  'payment',
+                ),
+                ...paymentTags.map(
+                  (tag) => _buildFilterTile(context, tag, 'payment'),
+                ),
+              ],
             ),
           ),
+          const Divider(),
+          // ▼▼ 設定ボタン（最下部） ▼▼
           ListTile(
-            leading: const Icon(Icons.calendar_month),
-            title: const Text('月別レポート'),
-            onTap: () {
+            leading: const Icon(Icons.settings, color: Colors.grey),
+            title: const Text('設定'),
+            onTap: () async {
+              // ドロワーを閉じる
               Navigator.pop(context);
-              Navigator.push(
+              // 設定画面へ遷移し、戻ってくるのを待つ
+              await Navigator.push(
                 context,
-                MaterialPageRoute(
-                  builder: (context) => const MonthlyHistoryScreen(),
-                ),
+                MaterialPageRoute(builder: (context) => const SettingsScreen()),
               );
+              // 戻ってきたらコールバックを実行（InputScreenを更新）
+              onSettingsChanged?.call();
             },
           ),
-          const Divider(),
-
-          // --- 費目セクション ---
-          _buildSectionHeader("費目別"),
-          // ▼▼ 追加: 手動で「デフォルト」へのリンクを追加 ▼▼
-          _buildFilterTile(
-            context,
-            const CategoryTag('デフォルト', Colors.blueGrey),
-            'expense',
-          ),
-          // その他のタグを展開
-          ...expenseTags.map(
-            (tag) => _buildFilterTile(context, tag, 'expense'),
-          ),
-
-          const SizedBox(height: 15),
-          const Divider(),
-
-          // --- 支払い方法セクション ---
-          _buildSectionHeader("支払い方法別"),
-          // ▼▼ 追加: 手動で「デフォルト」へのリンクを追加 ▼▼
-          _buildFilterTile(
-            context,
-            const CategoryTag('デフォルト', Colors.grey),
-            'payment',
-          ),
-          // その他のタグを展開
-          ...paymentTags.map(
-            (tag) => _buildFilterTile(context, tag, 'payment'),
-          ),
-
-          const SizedBox(height: 20),
+          const SizedBox(height: 20), // 下部の余白
         ],
       ),
     );

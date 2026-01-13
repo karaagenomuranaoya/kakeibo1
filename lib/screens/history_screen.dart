@@ -19,8 +19,11 @@ class HistoryScreen extends StatefulWidget {
 }
 
 class _HistoryScreenState extends State<HistoryScreen> {
-  List<TransactionItem> _history = [];
+  List<TransactionItem> _allHistory = [];
   final TransactionRepository _repository = TransactionRepository();
+
+  final PageController _pageController = PageController(initialPage: 1000);
+  int _currentPage = 1000;
 
   @override
   void initState() {
@@ -31,82 +34,185 @@ class _HistoryScreenState extends State<HistoryScreen> {
   Future<void> _load() async {
     final allItems = await _repository.getAllTransactions();
     setState(() {
-      _history = allItems.where((i) {
-        if (widget.filterKey == 'expense')
+      _allHistory = allItems.where((i) {
+        if (widget.filterKey == 'expense') {
           return i.expense == widget.filterValue;
-        if (widget.filterKey == 'payment')
+        }
+        if (widget.filterKey == 'payment') {
           return i.payment == widget.filterValue;
+        }
         return false;
       }).toList();
     });
   }
 
+  DateTime _getDateForPage(int page) {
+    final now = DateTime.now();
+    return DateTime(now.year, now.month + (page - 1000));
+  }
+
   @override
   Widget build(BuildContext context) {
-    int total = _history.fold(0, (s, i) => s + i.amount);
+    final currentMonthDate = _getDateForPage(_currentPage);
+
     return Scaffold(
-      appBar: AppBar(title: Text(widget.filterValue)),
+      appBar: AppBar(title: Text(widget.filterValue), centerTitle: true),
       body: Column(
         children: [
           Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(20),
-            color: widget.color?.withOpacity(0.1) ?? Colors.blue.shade50,
-            child: Center(
-              child: Column(
-                children: [
-                  Text(
-                    widget.filterKey == 'expense' ? '費目累計' : '支払い累計',
-                    style: const TextStyle(fontSize: 14, color: Colors.grey),
-                  ),
-                  Text(
-                    '¥ $total',
-                    style: TextStyle(
-                      fontSize: 28,
+            padding: const EdgeInsets.symmetric(vertical: 10),
+            color: Colors.white,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                IconButton(
+                  onPressed: () {
+                    _pageController.previousPage(
+                      duration: const Duration(milliseconds: 300),
+                      curve: Curves.easeInOut,
+                    );
+                  },
+                  icon: const Icon(Icons.chevron_left),
+                ),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  child: Text(
+                    "${currentMonthDate.year}年 ${currentMonthDate.month}月",
+                    style: const TextStyle(
+                      fontSize: 18,
                       fontWeight: FontWeight.bold,
-                      color: widget.color ?? Colors.black,
                     ),
                   ),
-                ],
-              ),
+                ),
+                IconButton(
+                  onPressed: () {
+                    _pageController.nextPage(
+                      duration: const Duration(milliseconds: 300),
+                      curve: Curves.easeInOut,
+                    );
+                  },
+                  icon: const Icon(Icons.chevron_right),
+                ),
+              ],
             ),
           ),
+
           Expanded(
-            child: ListView.builder(
-              itemCount: _history.length,
-              itemBuilder: (c, i) {
-                final item = _history[i];
-
-                // ▼▼ 修正: 追加情報の表示ロジック ▼▼
-                String detail = "";
-                if (widget.filterKey == 'expense') {
-                  // 費目でフィルタ中 → 支払い方法を表示
-                  if (item.payment != 'デフォルト') {
-                    detail = "  /  ${item.payment}";
-                  }
-                } else {
-                  // 支払いでフィルタ中 → 費目を表示
-                  if (item.expense != 'デフォルト') {
-                    detail = "  /  ${item.expense}";
-                  }
-                }
-
-                return ListTile(
-                  leading: Icon(
-                    widget.filterKey == 'payment' ? Icons.payment : Icons.label,
-                    color: widget.color,
-                  ),
-                  title: Text(
-                    '¥${item.amount}',
-                    style: const TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                  subtitle: Text("${item.displayDate}$detail"),
-                );
+            child: PageView.builder(
+              controller: _pageController,
+              onPageChanged: (index) {
+                setState(() {
+                  _currentPage = index;
+                });
+              },
+              itemBuilder: (context, index) {
+                return _buildMonthContent(index);
               },
             ),
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildMonthContent(int pageIndex) {
+    final date = _getDateForPage(pageIndex);
+    final monthData = _allHistory.where((i) {
+      return i.date.year == date.year && i.date.month == date.month;
+    }).toList();
+
+    int total = monthData.fold(0, (s, i) => s + i.amount);
+
+    return Column(
+      children: [
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 20),
+          color: widget.color?.withOpacity(0.1) ?? Colors.blue.shade50,
+          child: Center(
+            child: Column(
+              children: [
+                Text(
+                  '${date.month}月の合計',
+                  style: const TextStyle(fontSize: 14, color: Colors.grey),
+                ),
+                Text(
+                  '¥ $total',
+                  style: TextStyle(
+                    fontSize: 32,
+                    fontWeight: FontWeight.bold,
+                    color: widget.color ?? Colors.black,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+
+        Expanded(
+          child: monthData.isEmpty
+              ? const Center(
+                  child: Text('履歴はありません', style: TextStyle(color: Colors.grey)),
+                )
+              : ListView.builder(
+                  padding: const EdgeInsets.only(top: 10),
+                  itemCount: monthData.length,
+                  itemBuilder: (c, i) {
+                    final item = monthData[i];
+
+                    String detail = "";
+                    if (widget.filterKey == 'expense') {
+                      if (item.payment != 'デフォルト')
+                        detail = "  /  ${item.payment}";
+                    } else {
+                      if (item.expense != 'デフォルト')
+                        detail = "  /  ${item.expense}";
+                    }
+
+                    return ListTile(
+                      leading: Icon(
+                        widget.filterKey == 'payment'
+                            ? Icons.payment
+                            : Icons.label,
+                        color: widget.color,
+                      ),
+                      title: Row(
+                        children: [
+                          Text(
+                            '¥${item.amount}',
+                            style: const TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                          // メモがある場合はアイコンを表示
+                          if (item.memo != null && item.memo!.isNotEmpty) ...[
+                            const SizedBox(width: 8),
+                            const Icon(
+                              Icons.note,
+                              size: 16,
+                              color: Colors.grey,
+                            ),
+                          ],
+                        ],
+                      ),
+                      subtitle: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text("${item.displayDate}$detail"),
+                          // メモの内容を表示
+                          if (item.memo != null && item.memo!.isNotEmpty)
+                            Text(
+                              item.memo!,
+                              style: const TextStyle(
+                                color: Colors.blueGrey,
+                                fontSize: 12,
+                              ),
+                            ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+        ),
+      ],
     );
   }
 }
