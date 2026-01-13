@@ -2,37 +2,34 @@ import os
 import zipfile
 from pathlib import Path
 
-def create_flutter_minimal_zip(output_filename="kakeibo.zip"):
-    # AIが構造を理解するために含めるべきファイル・ディレクトリ
-    included_patterns = [
-        "lib/main.dart",                   # ソースコードの本体
-        "pubspec.yaml",           # 依存関係・プロジェクト設定
-        "analysis_options.yaml",  # Lint設定（コーディング規約）
-        "README.md",              # プロジェクト概要
-    ]
+def create_flutter_zip(output_filename="flutter_project.zip"):
+    # 除外ディレクトリ（Flutter特有の巨大な生成物を除外）
+    exclude_dirs = {
+        '.git', '.dart_tool', 'build', 'ios', 'android', 
+        'windows', 'linux', 'macos', '.idea', '.vscode'
+    }
+    # 除外ファイル
+    exclude_files = {'.DS_Store', output_filename, 'extract_flutter.py'}
 
-    project_root = Path.cwd()
+    print(f"Archiving to: {output_filename}...")
     
     with zipfile.ZipFile(output_filename, 'w', zipfile.ZIP_DEFLATED) as zipf:
-        print(f"--- 圧縮を開始します: {output_filename} ---")
-        
-        for pattern in included_patterns:
-            path = project_root / pattern
+        for root, dirs, files in os.walk('.'):
+            # 除外ディレクトリをスキップ
+            dirs[:] = [d for d in dirs if d not in exclude_dirs]
             
-            if path.is_dir():
-                # ディレクトリ内のファイルを再帰的に追加
-                for file_path in path.rglob('*'):
-                    if file_path.is_file() and not file_path.name.startswith('.'):
-                        relative_path = file_path.relative_to(project_root)
-                        zipf.write(file_path, relative_path)
-                        print(f"追加: {relative_path}")
-            
-            elif path.is_file():
-                # 単一ファイルを追加
-                zipf.write(path, path.name)
-                print(f"追加: {path.name}")
+            for file in files:
+                if file in exclude_files:
+                    continue
+                
+                file_path = os.path.join(root, file)
+                # ★ここが重要：相対パスを維持して、フォルダ構造を保つ
+                arcname = os.path.relpath(file_path, '.')
+                
+                zipf.write(file_path, arcname)
+                print(f"  Added: {arcname}")
 
-    print(f"\n完了しました！ 生成ファイル: {os.path.abspath(output_filename)}")
+    print(f"\nDone! Upload {output_filename} to AI Studio.")
 
 if __name__ == "__main__":
-    create_flutter_minimal_zip()
+    create_flutter_zip()
